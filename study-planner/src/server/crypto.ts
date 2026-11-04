@@ -8,7 +8,9 @@ function loadKey(): Buffer {
     if (/^[0-9a-f]{64}$/i.test(raw)) return Buffer.from(raw, 'hex');
     const b = Buffer.from(raw, 'base64');
     if (b.length === 32) return b;
-    throw new Error('TOKEN_ENCRYPTION_KEY must be 32 bytes, as 64 hex characters or base64');
+    if (raw.length < 32) throw new Error('TOKEN_ENCRYPTION_KEY must be at least 32 random characters (or 32 bytes as hex/base64)');
+    // Any other long random string (e.g. a generated secret): stretch it to 32 bytes.
+    return Buffer.from(crypto.hkdfSync('sha256', raw, 'cramless', 'token-encryption-key-v1', 32));
   }
   return Buffer.from(crypto.hkdfSync('sha256', env.authSecret, 'cramless', 'token-encryption-v1', 32));
 }

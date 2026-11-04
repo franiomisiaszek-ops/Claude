@@ -370,3 +370,10 @@ export const aiUsage = pgTable(
   },
   (t) => [index('ai_usage_user_idx').on(t.userId, t.createdAt), index('ai_usage_cache_idx').on(t.userId, t.cacheKey)],
 );
+
+/** Server-generated secrets (e.g. push keys), encrypted with TOKEN_ENCRYPTION_KEY. */
+export const appSecret = pgTable('app_secret', {
+  key: text('key').primaryKey(),
+  valueEnc: text('value_enc').notNull(),
+  createdAt: createdAt(),
+});

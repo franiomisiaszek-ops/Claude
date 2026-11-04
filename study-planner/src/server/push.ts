@@ -7,7 +7,7 @@ import { env, features } from './env';
 let configured = false;
 function configure() {
   if (configured || !features.push()) return;
-  webpush.setVapidDetails(env.push.subject || `mailto:support@${new URL(env.publicUrl).hostname}`, env.push.publicKey!, env.push.privateKey!);
+  webpush.setVapidDetails(env.push.subject || 'mailto:admin@example.com', env.push.publicKey!, env.push.privateKey!);
   configured = true;
 }
 
