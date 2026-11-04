@@ -35,6 +35,8 @@ services:
         value: "10"
       - key: AI_MONTHLY_BUDGET_USD
         value: "4"
+      - key: AI_USER_MONTHLY_USD
+        value: "1"
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
@@ -44,4 +46,7 @@ services:
       - key: EMAIL_FROM
         sync: false
       - key: SUPPORT_EMAIL
+        sync: false
+      # Your own (verified) email: shows the owner status card in Settings.
+      - key: ADMIN_EMAILS
         sync: false

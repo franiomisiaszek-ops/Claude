@@ -6,11 +6,13 @@ import crypto from 'node:crypto';
 
 const isProd = process.env.NODE_ENV === 'production';
 const port = Number(process.env.PORT ?? 3000);
+/** A real database means real users: never fall back to development secrets, even without NODE_ENV. */
+const strict = isProd || !!process.env.DATABASE_URL;
 
 function secret(name: string): string {
   const v = process.env[name];
   if (v && v.length >= 32) return v;
-  if (isProd) throw new Error(`${name} must be set to a random string of at least 32 characters`);
+  if (strict) throw new Error(`${name} must be set to a random string of at least 32 characters`);
   // Development only: a stable-per-process fallback so the app runs without setup.
   return crypto.createHash('sha256').update(`dev-${name}`).digest('hex');
 }
@@ -36,6 +38,10 @@ export const env = {
     dailyLimit: Number(process.env.AI_DAILY_LIMIT ?? 10),
     /** Whole-app monthly budget in US dollars; AI features pause when it's reached. */
     monthlyBudgetUsd: Number(process.env.AI_MONTHLY_BUDGET_USD ?? 4),
+    /** Per-user monthly cap in US dollars, so one user can't use up the whole budget. */
+    userMonthlyUsd: Number(process.env.AI_USER_MONTHLY_USD ?? 1),
+    /** AI features are for adults unless the operator has added safeguards for minors. */
+    allowMinors: process.env.AI_ALLOW_MINORS === 'true',
   },
   email: {
     resendApiKey: process.env.RESEND_API_KEY,
@@ -52,6 +58,13 @@ export const env = {
   cronSecret: process.env.CRON_SECRET,
   /** Run background jobs inside the web process (on by default). */
   inProcessJobs: process.env.IN_PROCESS_JOBS !== 'false',
+  /** Number of proxies in front of the app (Render: 1). */
+  trustProxy: Number(process.env.TRUST_PROXY ?? 1),
+  /** Verified emails that can see the owner status card. */
+  adminEmails: (process.env.ADMIN_EMAILS ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean),
 };
 
 export const features = {

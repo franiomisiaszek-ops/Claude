@@ -46,6 +46,7 @@ function Entry({ st, e }: { st: AppState; e: InboxEntry }) {
             {e.payload.topics ? <> · covers <em>{e.payload.topics}</em></> : null}
             {e.payload.materials?.length ? <> · will add {e.payload.materials.map((m: any) => m.title).join(', ')}</> : null}
             {!e.payload.quoteFound && ' · please double-check this one'}
+            {e.payload.ambiguousDate && <strong className="warn-text"> · check the date: it could be read as day/month or month/day</strong>}
           </p>
         ) : (
           <p className="muted small">We weren't sure what this is. Tell us and it joins the plan.</p>

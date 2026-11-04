@@ -45,6 +45,10 @@ Optional add-ons:
 6. When it says **Live**, open the service. At the top you'll see its address, like `https://cramless-xyz1.onrender.com`. If it differs from what you typed:
    - **Environment** → edit **PUBLIC_URL** → paste the exact address (no `/` at the end) → **Save, rebuild and deploy**.
 7. Open the address. You should see the sign-in page. Create your account.
+8. Back in **Environment**, set **ADMIN_EMAILS** to the email you signed up with. After you confirm that email, Settings shows a **Site status** card with:
+   - users and background jobs
+   - AI spend
+   - a proxy check: the address shown there should be your real internet address. If it isn't, set `TRUST_PROXY=2`.
 
 Render generated three secrets for you (`BETTER_AUTH_SECRET`, `TOKEN_ENCRYPTION_KEY`, `CRON_SECRET`). **Don't change them later**: changing them signs everyone out and disconnects Google.
 
@@ -62,6 +66,7 @@ A free Render app sleeps when nobody visits. This step wakes it every 5 minutes 
      - Headers → add `Authorization` with the value `Bearer ` followed by the secret (for example `Bearer 3f9c…`). There's a space after "Bearer".
    - Turn on **Notify me on failure** → **Create**.
 3. Click **Test run**. It should show **200 OK**.
+4. Recommended: **betterstack.com** (free) → **Uptime** → new monitor for `https://YOUR-ADDRESS/api/health`. It emails you if the site goes down.
 
 ## Step 4 (optional): AI document and syllabus reading (Claude)
 
@@ -78,7 +83,12 @@ Built-in limits protect your credit:
 
 **Model and cost.** The app uses Claude Opus 5.5 by default, about $0.07 for a typical PDF analysis, so $5 is roughly 70 analyses. Setting the variable `ANTHROPIC_MODEL` to `claude-haiku-5-5` makes it about 40× cheaper, but it is less capable. That choice is yours.
 
-**Minors.** If your users include people under 18, read Anthropic's guidelines for organizations serving minors before turning AI on.
+**Minors.**
+- Everyone is asked their birth month and year once, during setup. Accounts of people under 13 are deleted immediately.
+- AI features are switched off for anyone under 18, as Anthropic's guidelines for organizations serving minors recommend. Under-18s still get everything else, including exact page counts from uploaded files.
+- Only set `AI_ALLOW_MINORS=true` after you've added the safeguards those guidelines describe.
+
+**Per-user limit.** `AI_USER_MONTHLY_USD`, $1 by default, stops one person from using up the whole month's budget.
 
 ## Step 5 (optional): Google sign-in, Classroom and Calendar
 
@@ -106,7 +116,12 @@ To remove both limits, request verification in **Verification Center**. Google r
 - a short YouTube video showing how the app uses each permission
 - about a week
 
-**School accounts:** Google blocks students under 18 from apps their school hasn't approved. Their school admin approves the app under Admin console → Security → Access and data control → API controls → Manage third-party app access. Until then, those students can use their school's calendar feed instead.
+**This is the main thing to start early.** Google verification is what lets the app grow past 100 users with Classroom. It takes days to weeks, so start it as soon as you have a domain.
+
+**School accounts:**
+- Google blocks students under 18 from apps their school hasn't approved.
+- The page `https://YOUR-ADDRESS/schools` explains to school IT exactly how to approve the app, and includes an email students can forward.
+- Until it's approved, those students can use their school's calendar feed instead.
 
 ## Step 6 (optional): Email (confirm accounts, reset passwords, morning email)
 
@@ -118,7 +133,11 @@ Needs your own domain (Step 7).
 
 Free plan: 100 emails a day. Morning emails are off by default (push notifications are the main reminder).
 
-Until email is set up, accounts aren't email-verified. That makes the email setup important before you invite the public.
+Until email is set up:
+- With Google sign-in on, new accounts can only be created with Google, so nobody can claim someone else's email address.
+- Without Google, email sign-up works, but addresses aren't verified.
+
+Set up email before you invite the public: many students can't use Google sign-in until their school allows it. Once email is on, sign-ups that never confirm their address are removed after 48 hours.
 
 ## Step 7 (optional): Your own domain
 
@@ -140,9 +159,29 @@ Until email is set up, accounts aren't email-verified. That makes the email setu
 - [ ] (With AI) Courses → an exam → **Upload a file** → chapters are suggested.
 - [ ] Settings → **Download my data** works. A test account can be deleted.
 
+## Backups (recommended)
+
+Supabase's free plan has no backups. A ready-made GitHub workflow (`.github/workflows/study-planner-backup.yml`) makes an encrypted backup every night and keeps 21 days of them.
+
+1. Create an encryption key on your own computer.
+   - Install **age** (github.com/FiloSottile/age → Releases).
+   - Run `age-keygen -o cramless-backup-key.txt`.
+   - Keep that file safe and offline. Without it, backups can't be opened.
+   - The line starting with `age1…` is the public key.
+2. GitHub → your repository → **Settings → Secrets and variables → Actions → New repository secret**:
+   - `BACKUP_DATABASE_URL`: the same Supabase **Session pooler** string as in Render.
+   - `BACKUP_AGE_PUBLIC_KEY`: the `age1…` line.
+3. **Actions → Cramless database backup → Run workflow** to test it. Scheduled runs only start once this workflow is on your default branch (merge the branch). In a public repository, GitHub pauses scheduled workflows after 60 days with no activity.
+4. Restoring:
+   - Download the artifact.
+   - `age -d -i cramless-backup-key.txt cramless-DATE.dump.age > backup.dump`
+   - `pg_restore --no-owner -d "YOUR_DATABASE_URL" backup.dump`
+
 ## Updating the app
 
 Every push to the branch deploys automatically. Database changes apply themselves on startup.
+
+Every push also runs the tests (`.github/workflows/study-planner-ci.yml`), including against a real Postgres.
 
 ## When it grows
 

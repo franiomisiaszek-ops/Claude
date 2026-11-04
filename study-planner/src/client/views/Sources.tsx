@@ -146,8 +146,8 @@ function GoogleCard({ st }: { st: AppState }) {
             Connect Google
           </a>
           <p className="small muted">
-            School accounts: if you're under 18, your school's Google admin has to allow this app first. If Google blocks the connection, use the calendar feed
-            below; Classroom puts due dates in Google Calendar, so its feed covers most of it.
+            School accounts: if you're under 18, your school's Google admin has to allow this app first (<a href="/schools">send them this page</a>). Until
+            then, use the calendar feed below; Classroom puts due dates in Google Calendar, so its feed covers most of it.
           </p>
         </>
       )}

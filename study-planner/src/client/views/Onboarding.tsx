@@ -3,7 +3,7 @@ import { APP_NAME } from '../../shared/brand';
 import { fmtMin } from '../../shared/dates';
 import { GRADE_SCALES } from '../../shared/grades';
 import type { GradeValue } from '../../shared/types';
-import { act, api, type AppState } from '../api';
+import { act, api, setSignedOut, type AppState } from '../api';
 import { goTo } from '../App';
 import { GradeInput } from '../components';
 import { WeeklyEditor } from './Availability';
@@ -14,8 +14,74 @@ const PRESETS: { label: string; v: number[] }[] = [
   { label: 'Exam season', v: [120, 180, 180, 180, 180, 150, 240] },
 ];
 
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+/** Neutral age question (no hint of any cutoff). Under-13s are told the app isn't for them; their account is deleted. */
+function AgeStep({ onDone }: { onDone: () => void }) {
+  const [month, setMonth] = useState('');
+  const [year, setYear] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [tooYoung, setTooYoung] = useState(false);
+  const thisYear = new Date().getFullYear();
+  if (tooYoung) {
+    return (
+      <>
+        <h1>Sorry, you can't use {APP_NAME} yet</h1>
+        <p className="muted">{APP_NAME} isn't available for your age. Your account and everything in it have been deleted.</p>
+        <button onClick={() => setSignedOut()}>OK</button>
+      </>
+    );
+  }
+  return (
+    <>
+      <h1>When were you born?</h1>
+      <p className="muted">We ask everyone this once, to set up your account correctly.</p>
+      <div className="form-grid">
+        <label>
+          Month
+          <select value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Birth month">
+            <option value="">Month…</option>
+            {MONTHS.map((m, i) => (
+              <option key={m} value={String(i + 1).padStart(2, '0')}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Year
+          <select value={year} onChange={(e) => setYear(e.target.value)} aria-label="Birth year">
+            <option value="">Year…</option>
+            {Array.from({ length: 100 }, (_, i) => thisYear - i).map((y) => (
+              <option key={y} value={y}>
+                {y}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="ob-actions">
+        <span />
+        <button
+          className="primary"
+          disabled={!month || !year || busy}
+          onClick={async () => {
+            setBusy(true);
+            const r = await act(api<any>('POST', '/api/age', { birthMonth: `${year}-${month}` }));
+            setBusy(false);
+            if (r?.deleted) setTooYoung(true);
+            else if (r) onDone();
+          }}
+        >
+          Continue
+        </button>
+      </div>
+    </>
+  );
+}
+
 export function Onboarding({ st }: { st: AppState }) {
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(st.settings.birthMonth ? 0 : -1);
   const [weekly, setWeekly] = useState(st.availability.minutesByWeekday);
   const [digestTime, setDigestTime] = useState(st.settings.digestTime);
   const [scale, setScale] = useState(st.settings.gradeScale);
@@ -42,6 +108,7 @@ export function Onboarding({ st }: { st: AppState }) {
             <span key={i} className={i <= step ? 'on' : ''} />
           ))}
         </div>
+        {step === -1 && <AgeStep onDone={() => setStep(0)} />}
         {step === 0 && (
           <>
             <img src="/favicon.svg" alt="" width={56} height={56} />

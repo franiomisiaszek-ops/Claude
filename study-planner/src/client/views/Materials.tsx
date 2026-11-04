@@ -16,6 +16,13 @@ const UNITS: { id: UnitType; label: string }[] = [
   { id: 'minutes', label: 'minutes' },
 ];
 
+/** How this browser writes numeric dates (helps read "03/04" in a syllabus). */
+function localDateOrder(): 'DMY' | 'MDY' | 'YMD' {
+  const parts = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(2026, 10, 25));
+  const order = parts.filter((p) => p.type === 'day' || p.type === 'month' || p.type === 'year').map((p) => p.type[0].toUpperCase()).join('');
+  return order === 'MDY' || order === 'YMD' ? order : 'DMY';
+}
+
 const sourceName = (st: AppState, id?: string) => (id === 'syllabus' ? 'your syllabus' : st.sources.find((s) => s.id === id)?.name);
 
 export function Materials({ st }: { st: AppState }) {
@@ -136,7 +143,7 @@ function SyllabusImport({ st }: { st: AppState }) {
         onSubmit={async (e) => {
           e.preventDefault();
           setBusy(true);
-          const q = new URLSearchParams({ ...(isNew ? { courseName } : { courseId }), ...(termStart ? { termStart } : {}) });
+          const q = new URLSearchParams({ ...(isNew ? { courseName } : { courseId }), ...(termStart ? { termStart } : {}), dateOrder: localDateOrder() });
           const res = await act(
             file ? api<{ added: number; found: number }>('POST', `/api/ai/syllabus?${q}`, undefined, { raw: file, contentType: file.type || 'application/octet-stream' }) : api<{ added: number; found: number }>('POST', `/api/ai/syllabus?${q}`, undefined, { raw: text, contentType: 'text/plain' }),
           );

@@ -189,6 +189,8 @@ export const studySession = pgTable(
     pinned: boolean('pinned').notNull().default(false),
     status: text('status').notNull(),
     actualMinutes: integer('actual_minutes'),
+    /** Pace factor applied when this session was planned (for unbiased calibration). */
+    pace: real('pace'),
     reasons: jsonb('reasons').notNull().default(sql`'[]'::jsonb`),
   },
   (t) => [primaryKey({ columns: [t.userId, t.id] }), index('session_user_date_idx').on(t.userId, t.date)],
@@ -337,6 +339,8 @@ export const examResult = pgTable(
     minutesOutside: integer('minutes_outside').notNull().default(0),
     /** Material-based estimate (coverage, before learning and one-off adjustments). */
     baseEstimateMin: integer('base_estimate_min').notNull(),
+    /** Where that estimate came from: material, a time the user typed, or copied from history. */
+    baseSource: text('base_source').notNull().default('material'),
     /** How the exam felt: -1 easier than expected, 0 as expected, 1 harder. */
     feltDifficulty: integer('felt_difficulty'),
     /** Per material: weak | ok | strong | not_on_exam. */

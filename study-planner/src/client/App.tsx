@@ -6,7 +6,7 @@ import { clearDeviceData } from './push';
 import { Auth } from './views/Auth';
 import { Availability } from './views/Availability';
 import { Inbox } from './views/Inbox';
-import { Privacy, Terms } from './views/Legal';
+import { Privacy, Schools, Terms } from './views/Legal';
 import { Materials } from './views/Materials';
 import { Onboarding } from './views/Onboarding';
 import { Plan } from './views/Plan';
@@ -93,6 +93,7 @@ export function App() {
   const path = location.pathname;
   if (path === '/privacy') return <Privacy />;
   if (path === '/terms') return <Terms />;
+  if (path === '/schools') return <Schools />;
   return <Main />;
 }
 

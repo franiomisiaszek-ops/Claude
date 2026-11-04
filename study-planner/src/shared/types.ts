@@ -30,6 +30,8 @@ export interface Settings {
   /** Default target grade for exams, in the user's scale. */
   targetGrade?: GradeValue;
   reminders: { push: boolean; email: boolean };
+  /** Birth month `YYYY-MM`, asked once at setup (age gate; AI features are for adults). */
+  birthMonth?: string;
 }
 
 export interface Availability {
@@ -165,6 +167,8 @@ export interface Session {
   pinned: boolean;
   status: SessionStatus;
   actualMinutes?: number;
+  /** Pace factor applied when this session was planned (for unbiased calibration). */
+  pace?: number;
   reasons: Reason[];
 }
 
@@ -267,6 +271,8 @@ export interface ExamResult {
   minutesOutside: number;
   /** Material-based estimate (coverage, before learning and one-off adjustments). */
   baseEstimateMin: number;
+  /** Where that estimate came from. A guess counts less in learning; a copy of past time is not learned from. */
+  baseSource: 'material' | 'guess' | 'history';
   /** -1 easier than expected, 0 as expected, 1 harder. */
   feltDifficulty?: number;
   topicRatings: Record<string, TopicRating>;
@@ -351,6 +357,8 @@ export type PublicState = Omit<UserState, 'snapshots'> & {
   user: PublicUser;
   google: { available: boolean; connected: boolean; email?: string | null };
   features: { ai: boolean; push: boolean; email: boolean };
+  /** The operator (ADMIN_EMAILS) sees an owner status card. */
+  isAdmin: boolean;
   vapidPublicKey?: string;
   ai: { usedToday: number; dailyLimit: number };
 };

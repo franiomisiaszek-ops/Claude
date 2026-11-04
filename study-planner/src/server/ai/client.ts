@@ -49,13 +49,13 @@ export async function usageToday(db: DB, userId: string): Promise<number> {
   return Number(row?.n ?? 0);
 }
 
-async function spentThisMonthUsd(db: DB): Promise<number> {
+async function spentThisMonthUsd(db: DB, userId?: string): Promise<number> {
   const now = new Date();
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const [row] = await db
     .select({ micros: sql<number>`coalesce(sum(${aiUsage.costMicros}), 0)::bigint` })
     .from(aiUsage)
-    .where(gte(aiUsage.createdAt, start));
+    .where(userId ? and(gte(aiUsage.createdAt, start), eq(aiUsage.userId, userId)) : gte(aiUsage.createdAt, start));
   return Number(row?.micros ?? 0) / 1e6;
 }
 
@@ -63,6 +63,7 @@ async function spentThisMonthUsd(db: DB): Promise<number> {
 export async function assertAiAvailable(db: DB, userId: string): Promise<void> {
   if (!features.ai()) throw new AiError('AI features are not set up on this server.');
   if ((await usageToday(db, userId)) >= env.anthropic.dailyLimit) throw new AiError(`You've used today's ${env.anthropic.dailyLimit} AI analyses. Try again tomorrow, or add the material by hand.`);
+  if ((await spentThisMonthUsd(db, userId)) >= env.anthropic.userMonthlyUsd) throw new AiError("You've reached this month's AI limit for your account. Everything else still works; add material by hand.");
   if ((await spentThisMonthUsd(db)) >= env.anthropic.monthlyBudgetUsd) throw new AiError('AI analysis is paused for the rest of the month. Everything else still works; add material by hand.');
 }
 

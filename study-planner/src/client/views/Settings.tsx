@@ -120,8 +120,57 @@ export function Settings({ st }: { st: AppState }) {
         </form>
       </Card>
 
+      {st.isAdmin && <OwnerStatus />}
       <Account st={st} />
     </div>
+  );
+}
+
+/** Totals for the person running the site (ADMIN_EMAILS). No personal data. */
+function OwnerStatus() {
+  const [data, setData] = useState<any>(null);
+  useEffect(() => {
+    api<any>('GET', '/api/admin/status').then(setData).catch(() => {});
+  }, []);
+  if (!data) return null;
+  const xff = String(data.request.forwardedFor ?? '');
+  return (
+    <Card title="Site status (owner only)">
+      <div className="progress-grid">
+        <div className="stat">
+          <span className="stat-label">Users</span>
+          <span className="stat-value">{data.users.total}</span>
+          <span className="small muted">
+            {data.users.verified} verified · {data.activeLast7Days} active this week
+          </span>
+        </div>
+        <div className="stat">
+          <span className="stat-label">Connected apps</span>
+          <span className="stat-value">{data.sources.total}</span>
+          <span className="small muted">
+            {data.sources.overdue} overdue · {data.sources.erroring} erroring · {data.sources.needs_reconnect} need reconnect
+          </span>
+        </div>
+        <div className="stat">
+          <span className="stat-label">Reminders (24 h)</span>
+          <span className="stat-value">{data.remindersLast24h.push + data.remindersLast24h.email}</span>
+          <span className="small muted">
+            {data.remindersLast24h.push} push · {data.remindersLast24h.email} email · {data.overdueReminders} overdue · {data.push.failing}/{data.push.devices} devices failing
+          </span>
+        </div>
+        <div className="stat">
+          <span className="stat-label">AI this month</span>
+          <span className="stat-value">${Number(data.ai.spent_usd).toFixed(2)}</span>
+          <span className="small muted">
+            {data.ai.calls} calls · budget ${data.ai.budgetUsd} · {data.ai.model ?? 'off'}
+          </span>
+        </div>
+      </div>
+      <p className="small muted">
+        Proxy check: your address is seen as <code>{data.request.ip}</code> (X-Forwarded-For: <code>{xff || 'none'}</code>, trusted proxies: {data.request.trustProxy}).{' '}
+        {data.sources.overdue > 0 || data.overdueReminders > 0 ? 'Some jobs are overdue: check that the cron-job.org ping is running.' : 'Background jobs are on time.'}
+      </p>
+    </Card>
   );
 }
 

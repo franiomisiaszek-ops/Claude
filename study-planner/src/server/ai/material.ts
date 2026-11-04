@@ -105,7 +105,7 @@ export function localUnits(doc: ExtractedDoc, fileName: string): { method: 'outl
   return { method: 'whole', items: [{ title, unitType: doc.unitType, quantity: doc.units, startPage: 1, endPage: doc.units, difficulty: 2, confidence: 'medium' }] };
 }
 
-export async function analyzeMaterial(db: DB, userId: string, file: Buffer, fileName: string, courseName: string): Promise<MaterialAnalysis> {
+export async function analyzeMaterial(db: DB, userId: string, file: Buffer, fileName: string, courseName: string, opts: { useAi: boolean } = { useAi: true }): Promise<MaterialAnalysis> {
   const doc = await extractDocument(new Uint8Array(file));
   const summary = { kind: doc.kind, units: doc.units, unitType: doc.unitType, exactCount: doc.exactCount, scanned: doc.scanned, words: doc.words };
   const local = localUnits(doc, fileName);
@@ -113,6 +113,7 @@ export async function analyzeMaterial(db: DB, userId: string, file: Buffer, file
     return { fileName, doc: summary, ...local, note: `This looks like a scanned document, so its text can't be read. The ${doc.units} pages are counted exactly; split it into chapters yourself if you know them.` };
   }
   if (!features.ai()) return { fileName, doc: summary, ...local, note: 'AI analysis is not set up on this server, so units come from the document outline.' };
+  if (!opts.useAi) return { fileName, doc: summary, ...local, note: 'Units come from the document outline (AI analysis is available for adults).' };
   try {
     await assertAiAvailable(db, userId);
   } catch (e) {

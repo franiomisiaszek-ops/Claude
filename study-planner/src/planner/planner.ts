@@ -30,7 +30,7 @@ import type {
   Settings,
 } from '../shared/types';
 import { addDays, dateRange, diffDays, hhmmToMin, weekday, WEEKDAYS } from '../shared/dates';
-import { estimateMinutes } from './estimate';
+import { courseFactor, estimateMinutes } from './estimate';
 
 export interface PlanInput {
   today: ISODate;
@@ -439,6 +439,7 @@ export function plan(input: PlanInput): PlanResult {
             minutes: take,
             pinned: false,
             status: 'planned',
+            ...(isPractice || u.materialId.startsWith('auto:') ? {} : { pace: courseFactor(courseById.get(g.courseId)) }),
             reasons,
           });
         }

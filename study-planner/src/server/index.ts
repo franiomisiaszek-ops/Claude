@@ -6,10 +6,11 @@ import { connect } from './db';
 import { env, features } from './env';
 import { startJobs } from './jobs';
 import { ensureProfile } from './repo';
-import { assertProductionConfig, ensurePushKeys } from './setup';
+import { assertProductionConfig, assertTableOwnership, ensurePushKeys } from './setup';
 
 assertProductionConfig();
 const { db, kind } = await connect({ url: env.databaseUrl, dataDir: env.dataDir });
+await assertTableOwnership(db);
 await ensurePushKeys(db);
 const auth = createAuth(db, { onUserCreated: (id) => ensureProfile(db, id) });
 const app = createApp({ db, auth });

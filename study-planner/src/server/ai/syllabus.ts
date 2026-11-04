@@ -54,6 +54,8 @@ export interface SyllabusProposal {
   topics: string;
   confidence: number;
   quoteFound: boolean;
+  /** A numeric date like 03/04 that could be read either way. */
+  ambiguousDate: boolean;
 }
 
 const norm = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
@@ -93,7 +95,9 @@ export function resolveItems(raw: z.infer<typeof SyllabusSchema>, text: string, 
     }
     const quote = norm(it.quote).split(' ').slice(0, 8).join(' ');
     const quoteFound = !!quote && haystack.includes(quote);
-    const base = it.confidence === 'high' ? 0.65 : it.confidence === 'medium' ? 0.55 : 0.4;
+    const numeric = it.quote.match(/\b(\d{1,2})[./-](\d{1,2})(?:[./-]\d{2,4})?\b/);
+    const ambiguousDate = !!numeric && Number(numeric[1]) <= 12 && Number(numeric[2]) <= 12 && numeric[1] !== numeric[2];
+    const base = ambiguousDate ? 0.3 : it.confidence === 'high' ? 0.65 : it.confidence === 'medium' ? 0.55 : 0.4;
     return {
       kind: it.kind,
       title: it.title.trim().slice(0, 200) || 'Untitled',
@@ -103,22 +107,28 @@ export function resolveItems(raw: z.infer<typeof SyllabusSchema>, text: string, 
       // Always below the auto-accept threshold: every syllabus item is reviewed by the user.
       confidence: quoteFound ? base : 0.3,
       quoteFound,
+      ambiguousDate,
     };
   });
 }
 
-export async function analyzeSyllabus(db: DB, userId: string, text: string, today: ISODate, termStart?: ISODate): Promise<SyllabusProposal[]> {
+export async function analyzeSyllabus(db: DB, userId: string, text: string, today: ISODate, termStart?: ISODate, dateOrder?: 'DMY' | 'MDY' | 'YMD'): Promise<SyllabusProposal[]> {
   const clean = redact(text).slice(0, 120_000);
   const hash = crypto.createHash('sha256').update(clean).digest('hex');
   const raw = await callStructured({
     db,
     userId,
     kind: 'syllabus',
-    cacheKey: `${PROMPT_VERSION}:${env.anthropic.model}:${hash}`,
+    cacheKey: `${PROMPT_VERSION}:${env.anthropic.model}:${dateOrder ?? ''}:${hash}`,
     schema: SyllabusSchema,
     system: SYSTEM,
     effort: 'medium',
-    content: [{ type: 'text', text: `Today is ${today}.\n\n${untrusted('syllabus', clean)}` }],
+    content: [
+      {
+        type: 'text',
+        text: `Today is ${today}.${dateOrder ? ` The student's dates are usually written ${dateOrder === 'DMY' ? 'day/month/year' : dateOrder === 'MDY' ? 'month/day/year' : 'year-month-day'}; read numeric dates that way unless the syllabus clearly uses another order.` : ''}\n\n${untrusted('syllabus', clean)}`,
+      },
+    ],
   });
   return resolveItems(raw, clean, today, termStart);
 }

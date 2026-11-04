@@ -1,0 +1,36 @@
+# Nightly encrypted database backup (Supabase's free plan has no backups).
+# Setup (once): see "Backups" in study-planner/DEPLOY.md. Needs two repository secrets:
+#   BACKUP_DATABASE_URL     the Supabase *Session pooler* connection string (GitHub runners have no IPv6)
+#   BACKUP_AGE_PUBLIC_KEY   an `age` public key (age1...); keep the matching private key offline
+# Scheduled workflows only run from the default branch.
+name: Cramless database backup
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install pg_dump 17 and age
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -q
+          sudo apt-get install -y -q postgresql-client-17 age
+      - name: Dump and encrypt
+        env:
+          DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          AGE_RECIPIENT: ${{ secrets.BACKUP_AGE_PUBLIC_KEY }}
+        run: |
+          if [ -z "$DATABASE_URL" ] || [ -z "$AGE_RECIPIENT" ]; then echo "Set the BACKUP_DATABASE_URL and BACKUP_AGE_PUBLIC_KEY secrets first."; exit 1; fi
+          /usr/lib/postgresql/17/bin/pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL" | age -r "$AGE_RECIPIENT" > cramless-$(date -u +%Y-%m-%d).dump.age
+          ls -la *.dump.age
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cramless-backup-${{ github.run_id }}
+          path: '*.dump.age'
+          retention-days: 21

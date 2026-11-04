@@ -92,9 +92,9 @@ export function estimateSteps(m: Material, course?: Course): EstimateStep[] {
  * Updates the pace factor from one session: r = actual ÷ (planned ÷ factor used when planning).
  * Averaging in log space converges to the true pace (averaging actual ÷ planned would settle at its square root).
  */
-export function updateCalibration(course: Course, plannedMin: number, actualMin: number): Course {
+export function updateCalibration(course: Course, plannedMin: number, actualMin: number, paceWhenPlanned?: number): Course {
   if (plannedMin <= 0 || actualMin <= 0) return course;
-  const applied = courseFactor(course);
+  const applied = paceWhenPlanned ?? courseFactor(course);
   const r = clamp((actualMin * applied) / plannedMin, 0.25, 4);
   const logF = course.samples === 0 ? Math.log(r) : (1 - ALPHA) * Math.log(course.calibrationFactor) + ALPHA * Math.log(r);
   return { ...course, calibrationFactor: Math.round(Math.exp(logF) * 1000) / 1000, samples: course.samples + 1 };

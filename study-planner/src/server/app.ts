@@ -59,7 +59,7 @@ export type Mutation = (state: UserState, ctx: MutationCtx) => void | Promise<vo
 export function createApp({ db, auth }: AppDeps) {
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', 1);
+  app.set('trust proxy', env.trustProxy);
   app.use(
     helmet({
       contentSecurityPolicy: {
@@ -80,6 +80,14 @@ export function createApp({ db, auth }: AppDeps) {
       crossOriginEmbedderPolicy: false,
     }),
   );
+
+  // The client address as Express resolves it through the trusted proxies. Always overwritten,
+  // so a client can't spoof it; Better Auth reads it for per-user rate limits.
+  app.use((req, _res, next) => {
+    if (req.ip) req.headers['x-cramless-client-ip'] = req.ip;
+    else delete req.headers['x-cramless-client-ip'];
+    next();
+  });
 
   // Better Auth handles its own body parsing, CSRF (origin) checks and rate limits.
   app.all('/api/auth/*splat', toNodeHandler(auth));
@@ -110,7 +118,15 @@ export function createApp({ db, auth }: AppDeps) {
   });
 
   app.get('/api/config', (_req, res) => {
-    res.json({ appName: APP_NAME, googleSignIn: features.google(), emailVerification: features.email(), passwordReset: features.email(), supportEmail: env.supportEmail ?? null });
+    res.json({
+      appName: APP_NAME,
+      googleSignIn: features.google(),
+      emailSignUp: features.email() || !features.google(),
+      emailVerification: features.email(),
+      passwordReset: features.email(),
+      supportEmail: env.supportEmail ?? null,
+      googleClientId: env.google.clientId ?? null,
+    });
   });
 
   app.post('/api/cron/tick', async (req, res) => {
@@ -155,7 +171,8 @@ export function createApp({ db, auth }: AppDeps) {
       today,
       user,
       google: { available: features.google(), ...google },
-      features: { ai: features.ai(), push: features.push(), email: features.email() },
+      features: { ai: aiAllowedFor(state), push: features.push(), email: features.email() },
+      isAdmin: isAdmin(user),
       vapidPublicKey: env.push.publicKey,
       ai: { usedToday: await aiUsedToday(user.id), dailyLimit: env.anthropic.dailyLimit },
       learning: learnedFactors(state.results, state.courses, state.settings),
@@ -215,6 +232,56 @@ export function createApp({ db, auth }: AppDeps) {
     } catch (e) {
       fail(res, e);
     }
+  });
+
+  /** Neutral age screen (birth month and year). Under 13: the account is deleted right away. */
+  api.post('/age', async (req, res) => {
+    try {
+      const bm = String(req.body?.birthMonth ?? '');
+      need(/^\d{4}-(0[1-9]|1[0-2])$/.test(bm), 'Choose your birth month and year');
+      const year = Number(bm.slice(0, 4));
+      need(year >= 1900 && year <= new Date().getUTCFullYear(), 'Choose your birth month and year');
+      if (ageInYears(bm) < 13) {
+        await disconnectGoogle(db, req.user!.id);
+        await db.delete(s.user).where(eq(s.user.id, req.user!.id));
+        return res.json({ deleted: true });
+      }
+      const state = await applyMutation(req, null, (st) => {
+        need(!st.settings.birthMonth, 'Your birth month is already set');
+        st.settings.birthMonth = bm;
+      });
+      res.json(await publicState(state, req.user!));
+    } catch (e) {
+      fail(res, e);
+    }
+  });
+
+  /** Owner-only totals for running the service (no personal data). */
+  api.get('/admin/status', async (req, res) => {
+    if (!isAdmin(req.user!)) return res.status(404).json({ error: 'Not found' });
+    const one = async (q: ReturnType<typeof sql>) => {
+      const r: any = await db.execute(q);
+      return (r.rows ?? r)[0] ?? {};
+    };
+    const monthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
+    res.json({
+      users: await one(sql`select count(*)::int as total, count(*) filter (where email_verified)::int as verified from "user"`),
+      activeLast7Days: (await one(sql`select count(*)::int as n from profile where updated_at > now() - interval '7 days'`)).n,
+      sources: await one(sql`select count(*)::int as total,
+        count(*) filter (where needs_reconnect)::int as needs_reconnect,
+        count(*) filter (where status = 'error')::int as erroring,
+        count(*) filter (where next_sync_at < now() - interval '30 minutes' and not needs_reconnect)::int as overdue
+        from source`),
+      remindersLast24h: await one(sql`select count(*) filter (where channel = 'push')::int as push, count(*) filter (where channel = 'email')::int as email from digest_log where sent_at > now() - interval '24 hours'`),
+      overdueReminders: (await one(sql`select count(*)::int as n from profile where next_digest_at < now() - interval '30 minutes'`)).n,
+      push: await one(sql`select count(*)::int as devices, count(*) filter (where failure_count > 0)::int as failing from push_subscription`),
+      ai: {
+        ...(await one(sql`select count(*)::int as calls, (coalesce(sum(cost_micros), 0) / 1e6)::float as spent_usd from ai_usage where created_at >= ${monthStart}`)),
+        budgetUsd: env.anthropic.monthlyBudgetUsd,
+        model: features.ai() ? env.anthropic.model : null,
+      },
+      request: { ip: req.ip, forwardedFor: req.get('x-forwarded-for') ?? null, trustProxy: env.trustProxy },
+    });
   });
 
   api.post(
@@ -492,11 +559,14 @@ export function createApp({ db, auth }: AppDeps) {
       }
       if (b.actualMinutes != null && b.actualMinutes !== '') {
         x!.actualMinutes = num(b.actualMinutes, 0, 600, 'Actual minutes');
-        // Learn pace only from coverage sessions whose length the app chose.
+        // Learn pace only from coverage sessions whose length the app chose: not pinned or resized,
+        // no exact override, and no "more/less time" the user asked for on the item or exam.
         const m = st.materials.find((y) => y.id === x!.materialId);
-        if (x!.status === 'done' && x!.kind === 'new' && !x!.pinned && m && m.estimateOverride == null) {
+        const dl = m?.deadlineId ? st.deadlines.find((y) => y.id === m.deadlineId) : undefined;
+        const adjusted = (m?.timeAdjust ?? 1) !== 1 || (dl?.timeAdjust ?? 1) < 1;
+        if (x!.status === 'done' && x!.kind === 'new' && !x!.pinned && m && m.estimateOverride == null && !adjusted) {
           const i = st.courses.findIndex((c) => c.id === x!.courseId);
-          if (i >= 0) st.courses[i] = updateCalibration(st.courses[i], x!.minutes, x!.actualMinutes);
+          if (i >= 0) st.courses[i] = updateCalibration(st.courses[i], x!.minutes, x!.actualMinutes, x!.pace);
         }
       }
       if (b.date != null && b.date !== x!.date) {
@@ -648,6 +718,7 @@ export function createApp({ db, auth }: AppDeps) {
         minutesInApp: effort.minutesInApp,
         minutesOutside: 0,
         baseEstimateMin: effort.baseEstimateMin,
+        baseSource: effort.baseSource,
         topicRatings: {},
         excluded: false,
         reminderCount: 0,
@@ -656,6 +727,7 @@ export function createApp({ db, auth }: AppDeps) {
       applyResultFields(r, b, ratings);
       r.minutesInApp = effort.minutesInApp;
       r.baseEstimateMin = effort.baseEstimateMin;
+      r.baseSource = effort.baseSource;
       if (!existing) st.results.push(r);
       for (const [id, rating] of Object.entries(ratings)) {
         const m = st.materials.find((x) => x.id === id);
@@ -848,7 +920,7 @@ export function createApp({ db, auth }: AppDeps) {
     }
   });
 
-  registerAiRoutes(api, { db, applyMutation, mutate, fail, respondState, publicState });
+  registerAiRoutes(api, { db, applyMutation, mutate, fail, respondState, publicState, aiAllowedFor });
 
   app.use('/api', api);
 
@@ -929,6 +1001,24 @@ export function createApp({ db, auth }: AppDeps) {
 
   return app;
 }
+
+/** Whole years since the birth month; counted conservatively (the birthday month itself doesn't count). */
+export function ageInYears(birthMonth: string, now = new Date()): number {
+  const y = Number(birthMonth.slice(0, 4));
+  const m = Number(birthMonth.slice(5, 7));
+  const ny = now.getUTCFullYear();
+  const nm = now.getUTCMonth() + 1;
+  return ny - y - (nm <= m ? 1 : 0);
+}
+
+/** AI features are for adults unless the operator has added safeguards for minors (AI_ALLOW_MINORS). */
+export function aiAllowedFor(state: Pick<UserState, 'settings'>): boolean {
+  if (!features.ai()) return false;
+  if (env.anthropic.allowMinors) return true;
+  return !!state.settings.birthMonth && ageInYears(state.settings.birthMonth) >= 18;
+}
+
+const isAdmin = (u: PublicUser) => u.emailVerified && env.adminEmails.includes(u.email.toLowerCase());
 
 function validTz(tz: unknown): boolean {
   if (typeof tz !== 'string' || tz.length > 64) return false;

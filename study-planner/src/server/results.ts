@@ -18,9 +18,13 @@ export function effortFor(state: UserState, deadlineId: string, ratings: Record<
   const courseOf = (id: string) => state.courses.find((c) => c.id === id);
   const materials = state.materials.filter((m) => m.deadlineId === deadlineId && !notOnExam.has(m.id));
   let baseEstimateMin = materials.reduce((a, m) => a + coverageMinutes(m, courseOf(m.courseId)), 0);
+  let baseSource: 'material' | 'guess' | 'history' = 'material';
   const d = state.deadlines.find((x) => x.id === deadlineId);
-  if (!baseEstimateMin && d?.roughMinutes) baseEstimateMin = d.roughMinutes;
-  return { minutesInApp, baseEstimateMin };
+  if (!baseEstimateMin && d?.roughMinutes) {
+    baseEstimateMin = d.roughMinutes;
+    baseSource = d.roughSource === 'history' ? 'history' : 'guess';
+  }
+  return { minutesInApp, baseEstimateMin, baseSource };
 }
 
 export const targetShare = (state: UserState, courseId: string) =>

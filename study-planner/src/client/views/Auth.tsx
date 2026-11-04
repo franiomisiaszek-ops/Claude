@@ -14,7 +14,6 @@ export function Auth({ initial }: { initial?: Mode }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [agree, setAgree] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(params.get('error') ? 'Sign-in was cancelled or failed. Please try again.' : null);
 
@@ -33,7 +32,6 @@ export function Auth({ initial }: { initial?: Mode }) {
     setError(null);
     try {
       if (mode === 'signup') {
-        if (!agree) throw new Error('Please confirm your age and accept the terms.');
         const { error } = await authClient.signUp.email({ email, password, name: name.trim() || email.split('@')[0], callbackURL: '/' });
         if (error) throw error;
         if (cfg?.emailVerification) setMode('check-email');
@@ -134,6 +132,9 @@ export function Auth({ initial }: { initial?: Mode }) {
               </>
             )}
 
+            {mode === 'signup' && cfg && !cfg.emailSignUp ? (
+              <p className="small muted">New accounts use Google sign-in on this site. {cfg.googleSignIn ? '' : 'Sign-up is not available right now.'}</p>
+            ) : (
             <form className="stack-sm" onSubmit={submit}>
               {mode === 'signup' && (
                 <label className="field">
@@ -162,12 +163,9 @@ export function Auth({ initial }: { initial?: Mode }) {
                 </label>
               )}
               {mode === 'signup' && (
-                <label className="check-row small">
-                  <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
-                  <span>
-                    I'm at least 13 (or have a parent's permission) and I accept the <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.
-                  </span>
-                </label>
+                <p className="small muted">
+                  By creating an account you accept the <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.
+                </p>
               )}
               {error && (
                 <p className="error-text" role="alert">
@@ -178,6 +176,7 @@ export function Auth({ initial }: { initial?: Mode }) {
                 {busy ? 'Please wait…' : mode === 'signin' ? 'Sign in' : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Change password'}
               </button>
             </form>
+            )}
 
             <div className="auth-links small">
               {mode === 'signin' && cfg?.passwordReset && (

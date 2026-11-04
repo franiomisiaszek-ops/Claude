@@ -47,8 +47,29 @@ export const information = (S: number) => {
 export const thetaOf = (x: number, S: number, felt?: number) => Math.log(x) - Math.log(-Math.log(1 - S)) - Math.log(FELT_DELTA[String(felt ?? 0)] ?? 1);
 export const factorFor = (theta: number, T: number) => Math.exp(theta) * -Math.log(1 - T);
 
+export function targetGradeFor(course: Pick<Course, 'targetGrade'> | undefined, settings: Pick<Settings, 'targetGrade'>) {
+  return course?.targetGrade ?? settings.targetGrade;
+}
+
+/**
+ * A grade bin (letter, UK class, pass) only says "at least this good". If it is the top bin, or at or above
+ * the target's bin on the same scale, it must not be read as falling short of the target.
+ */
+export function metTargetBin(grade: ExamResult['grade'], target: ReturnType<typeof targetGradeFor>): boolean {
+  if (!grade) return false;
+  const scale = scaleById(grade.scale);
+  if (scale.kind !== 'options') return false;
+  const idx = scale.options!.findIndex((o) => o.value.toLowerCase() === String(grade.value).toLowerCase());
+  if (idx === 0) return true;
+  if (target && target.scale === scale.id) {
+    const t = scale.options!.findIndex((o) => o.value.toLowerCase() === String(target.value).toLowerCase());
+    return t >= 0 && idx >= 0 && idx <= t;
+  }
+  return false;
+}
+
 export function targetFor(course: Pick<Course, 'targetGrade'> | undefined, settings: Pick<Settings, 'targetGrade'>): number {
-  const g = course?.targetGrade ?? settings.targetGrade;
+  const g = targetGradeFor(course, settings);
   if (!g) return 0.8;
   try {
     return clamp(normalizeGrade(g), T_MIN, T_MAX);
@@ -90,19 +111,27 @@ export interface LearnedCourse {
 export function learnedFactors(results: ExamResult[], courses: Course[], settings: Pick<Settings, 'targetGrade'>): Record<string, LearnedCourse> {
   const defaultT = targetFor(undefined, settings);
   const thetaPop = -Math.log(-Math.log(1 - defaultT));
+  const courseById = new Map(courses.map((c) => [c.id, c]));
   const usable = results
-    .filter((r) => r.score != null && !r.excluded && r.baseEstimateMin > 0 && r.minutesInApp + r.minutesOutside > 0)
+    // A copy of past study time as the estimate would make learning circular: leave those out.
+    .filter((r) => r.score != null && !r.excluded && r.baseEstimateMin > 0 && r.minutesInApp + r.minutesOutside > 0 && r.baseSource !== 'history')
     .sort((a, b) => a.dueAt.localeCompare(b.dueAt) || a.recordedAt.localeCompare(b.recordedAt) || a.id.localeCompare(b.id));
 
   const obs: Observation[] = usable.map((r) => {
     let S = r.score!;
     let scaleWeight = 1;
+    const T = targetFor(courseById.get(r.courseId), settings);
     if (r.grade && scaleById(r.grade.scale).id === 'passfail') {
-      // A pass only says "above the pass mark": weak evidence. A fail is strong evidence.
+      // A pass only says "above the pass mark": weak evidence that can hold or lower time, never raise it.
+      // A fail is strong evidence.
       const pass = String(r.grade.value) === 'pass';
-      S = pass ? 0.6 : 0.4;
+      S = pass ? Math.max(0.6, T) : 0.4;
       scaleWeight = pass ? 0.3 : 1;
+    } else if (metTargetBin(r.grade, targetGradeFor(courseById.get(r.courseId), settings))) {
+      S = Math.max(S, T);
     }
+    // An estimate the user guessed is weaker evidence than one computed from material.
+    if (r.baseSource === 'guess') scaleWeight *= 0.3;
     S = clamp(S, S_MIN, S_MAX);
     const minutes = r.minutesInApp + r.minutesOutside;
     const x = clamp(minutes / r.baseEstimateMin, 0.05, 10);
@@ -161,8 +190,9 @@ export function learnedFactors(results: ExamResult[], courses: Course[], setting
       continue;
     }
     if (!list.length) {
-      // No grades in this course yet: borrow gently from the student's other courses.
-      const raw = factorFor(thetaUser, T);
+      // No grades in this course yet: borrow only how the student's effort compares overall
+      // (e^(θ_user − θ_pop)), not the effect of this course's target, which has no evidence yet.
+      const raw = factorFor(thetaUser, defaultT);
       const factor = clamp(raw, MAX_DOWN, MAX_UP);
       out[course.id] = {
         ...base,

@@ -24,6 +24,20 @@ interface Deps {
   fail: (res: Response, e: unknown) => unknown;
   respondState: (req: Request, res: Response) => Promise<void>;
   publicState: (state: UserState, user: any) => Promise<PublicState>;
+  aiAllowedFor: (state: Pick<UserState, 'settings'>) => boolean;
+}
+
+/** One document analysis at a time (free instances have 512 MB), with a short queue. */
+function createGate(maxWaiting: number) {
+  let chain: Promise<unknown> = Promise.resolve();
+  let waiting = 0;
+  return async <T>(fn: () => Promise<T>): Promise<T> => {
+    if (waiting >= maxWaiting) throw new AiError('The server is busy reading other documents. Try again in a minute.');
+    waiting++;
+    const run = chain.then(fn, fn);
+    chain = run.catch(() => {}).finally(() => waiting--);
+    return run;
+  };
 }
 
 const MAX_UPLOAD = 25 * 1024 * 1024;
@@ -38,6 +52,13 @@ export function registerAiRoutes(api: Router, d: Deps) {
     message: { error: 'Too many analyses at once. Wait a minute and try again.' },
   });
   const raw = express.raw({ type: () => true, limit: MAX_UPLOAD });
+  const gate = createGate(3);
+  /** Under-18 users keep every non-AI path; AI is for adults by default. */
+  const adultsOnly = async (req: Request, res: Response, next: () => void) => {
+    const st = await loadState(d.db, req.user!.id);
+    if (!d.aiAllowedFor(st)) return res.status(403).json({ error: 'AI features are available for adults (18+). You can add material by hand or paste a list.' });
+    next();
+  };
 
   const aiFail = (res: Response, e: unknown) => {
     if (e instanceof AiError || e instanceof ExtractError) return res.status(400).json({ error: e.message });
@@ -46,34 +67,36 @@ export function registerAiRoutes(api: Router, d: Deps) {
 
   /** Upload a document → proposed study units (nothing is saved until the user accepts). */
   api.post('/ai/material', perUser, raw, async (req, res) => {
+    // Local extraction (exact page counts) works for everyone; Claude is only used for adults.
     try {
       const body = req.body as Buffer;
       need(Buffer.isBuffer(body) && body.length > 0, 'Choose a file to upload');
       const st = await loadState(d.db, req.user!.id);
       const course = st.courses.find((c) => c.id === req.query.courseId);
       const fileName = optStr(req.query.fileName, 200) ?? 'Document';
-      res.json(await analyzeMaterial(d.db, req.user!.id, body, fileName, course?.name ?? ''));
+      res.json(await gate(() => analyzeMaterial(d.db, req.user!.id, body, fileName, course?.name ?? '', { useAi: d.aiAllowedFor(st) })));
     } catch (e) {
       aiFail(res, e);
     }
   });
 
   /** Syllabus (pasted text, or a file as the raw body) → proposals in the inbox for review. */
-  api.post('/ai/syllabus', perUser, raw, async (req, res) => {
+  api.post('/ai/syllabus', perUser, adultsOnly, raw, async (req, res) => {
     try {
       const body = req.body as Buffer;
       need(Buffer.isBuffer(body) && body.length > 0, 'Paste the syllabus or upload a file');
       let text: string;
       if (req.get('content-type')?.startsWith('text/plain')) text = body.toString('utf8');
       else {
-        const doc = await extractDocument(new Uint8Array(body));
+        const doc = await gate(() => extractDocument(new Uint8Array(body)));
         need(!doc.scanned, 'This looks like a scanned document, so its text can\'t be read. Paste the syllabus text instead.');
         text = doc.pages.map((p) => p.text).join('\n');
       }
       need(text.trim().length >= 40, 'That syllabus is too short to read.');
       const termStart = req.query.termStart ? date(req.query.termStart, 'Term start') : undefined;
       const snapshotState = await loadState(d.db, req.user!.id);
-      const proposals = await analyzeSyllabus(d.db, req.user!.id, text, todayFor(snapshotState), termStart);
+      const dateOrder = ['DMY', 'MDY', 'YMD'].includes(String(req.query.dateOrder)) ? (String(req.query.dateOrder) as 'DMY' | 'MDY' | 'YMD') : undefined;
+      const proposals = await analyzeSyllabus(d.db, req.user!.id, text, todayFor(snapshotState), termStart, dateOrder);
       const courseName = str(req.query.courseName ?? 'Syllabus', 'Course', 80);
       let added = 0;
       const state = await d.applyMutation(req, null, (st) => {
@@ -98,6 +121,7 @@ export function registerAiRoutes(api: Router, d: Deps) {
               dateText: p.dateText,
               topics: p.topics,
               quoteFound: p.quoteFound,
+              ambiguousDate: p.ambiguousDate,
             },
             createdAt: new Date().toISOString(),
             resolved: false,
@@ -115,7 +139,7 @@ export function registerAiRoutes(api: Router, d: Deps) {
    * Exam scope from its Classroom/LMS description ("Test on chapters 4–6").
    * Pattern matching first; Claude only when the text is free-form.
    */
-  api.post('/ai/scope/:deadlineId', perUser, async (req, res) => {
+  api.post('/ai/scope/:deadlineId', perUser, adultsOnly, async (req, res) => {
     try {
       const st = await loadState(d.db, req.user!.id);
       const dl = st.deadlines.find((x) => x.id === req.params.deadlineId);

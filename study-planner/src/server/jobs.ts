@@ -8,6 +8,7 @@ import { lt, sql } from 'drizzle-orm';
 import type { DB } from './db';
 import { aiUsage, inboxEntry } from './db/schema';
 import { deliverDigest } from './digest';
+import { features } from './env';
 import { syncSource } from './sync';
 
 const rowsOf = (res: any): any[] => (Array.isArray(res) ? res : (res?.rows ?? []));
@@ -90,6 +91,11 @@ export async function tick(db: DB, budgetMs = 25_000): Promise<TickSummary> {
     const old = new Date(Date.now() - 60 * 86_400_000);
     await db.delete(inboxEntry).where(sql`${inboxEntry.resolved} = true and ${inboxEntry.createdAt} < ${old}`);
     await db.delete(aiUsage).where(lt(aiUsage.createdAt, new Date(Date.now() - 400 * 86_400_000)));
+    if (features.email()) {
+      // Sign-ups that never confirmed their email (and so never got in) are removed after 48 hours.
+      await db.execute(sql`delete from "user" u where u.email_verified = false and u.created_at < now() - interval '48 hours'
+        and not exists (select 1 from profile p where p.user_id = u.id and (p.settings->>'onboarded')::boolean)`);
+    }
   }
   return { synced, digests, ms: Date.now() - start };
 }

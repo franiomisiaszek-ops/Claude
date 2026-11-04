@@ -20,6 +20,9 @@ export function createAuth(db: DB, hooks: { onUserCreated: (userId: string) => P
       maxPasswordLength: 128,
       // Verification needs a working email sender; without one, accounts work unverified.
       requireEmailVerification: features.email(),
+      // Without an email sender, addresses can't be verified. If Google sign-in exists, use only that for new
+      // accounts, so nobody can claim someone else's address with an unverified account.
+      disableSignUp: !features.email() && features.google(),
       autoSignIn: true,
       sendResetPassword: async ({ user: u, url }) => {
         await sendEmail({
@@ -61,6 +64,9 @@ export function createAuth(db: DB, hooks: { onUserCreated: (userId: string) => P
     },
     advanced: {
       useSecureCookies: env.publicUrl.startsWith('https://'),
+      // Express resolves the client address (with `trust proxy`) and passes it in this header,
+      // so rate limits stay per user even when the proxy chain adds several addresses.
+      ipAddress: { ipAddressHeaders: ['x-cramless-client-ip'] },
     },
     databaseHooks: {
       user: {

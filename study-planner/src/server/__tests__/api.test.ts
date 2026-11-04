@@ -6,6 +6,7 @@ import { createAuth } from '../auth';
 import { connect, type DB } from '../db';
 import { tick } from '../jobs';
 import { ensureProfile } from '../repo';
+import { __APP_TABLES, assertTableOwnership } from '../setup';
 
 let server: Server;
 let base = '';
@@ -147,11 +148,37 @@ describe('API', () => {
     expect(out.synced).toBeGreaterThanOrEqual(1);
   });
 
+  it('has row-level security on every table, owned by the app role', async () => {
+    const res: any = await db.execute(sql`select relname, relrowsecurity from pg_class where relkind = 'r' and relnamespace = 'public'::regnamespace`);
+    const rows: { relname: string; relrowsecurity: boolean }[] = res.rows ?? res;
+    const app = rows.filter((r) => __APP_TABLES.includes(r.relname));
+    expect(app.length).toBe(__APP_TABLES.length);
+    expect(app.filter((r) => !r.relrowsecurity).map((r) => r.relname)).toEqual([]);
+    await expect(assertTableOwnership(db)).resolves.toBeUndefined();
+  });
+
+  it('asks age neutrally: under 13 deletes the account; minors get no AI', async () => {
+    const kid = client(await signUp('kid@example.com'));
+    const y = new Date().getUTCFullYear() - 10;
+    const del = await kid('POST', '/api/age', { birthMonth: `${y}-06` });
+    expect(del.json.deleted).toBe(true);
+    expect((await kid('GET', '/api/state')).status).toBe(401);
+    const teenCookie = await signUp('teen@example.com');
+    const teen = client(teenCookie);
+    const t = await teen('POST', '/api/age', { birthMonth: `${new Date().getUTCFullYear() - 15}-01` });
+    expect(t.status).toBe(200);
+    expect(t.json.settings.birthMonth).toMatch(/^\d{4}-01$/);
+    expect(t.json.features.ai).toBe(false);
+    expect((await teen('POST', '/api/age', { birthMonth: '1990-01' })).status).toBe(400); // can't be changed later
+    const syl = await fetch(`${base}/api/ai/syllabus?courseName=X`, { method: 'POST', headers: { cookie: teenCookie, Origin: ORIGIN, 'Content-Type': 'text/plain' }, body: 'x'.repeat(100) });
+    expect(syl.status).toBe(403);
+  });
+
   it('deletes an account and everything in it', async () => {
     const res = await b('DELETE', '/api/account', { confirm: 'DELETE' });
     expect(res.status).toBe(200);
     expect((await b('GET', '/api/state')).status).toBe(401);
-    const rows: any = await db.execute(sql`select count(*)::int as n from profile`);
-    expect((rows.rows ?? rows)[0].n).toBe(1);
+    const rows: any = await db.execute(sql`select count(*)::int as n from profile p join "user" u on u.id = p.user_id where u.email = 'bob@example.com'`);
+    expect((rows.rows ?? rows)[0].n).toBe(0);
   });
 });

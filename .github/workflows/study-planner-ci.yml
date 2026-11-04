@@ -1,0 +1,38 @@
+name: Cramless CI
+
+on:
+  push:
+    paths: ['study-planner/**', '.github/workflows/study-planner-ci.yml']
+  pull_request:
+    paths: ['study-planner/**']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: study-planner
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cramless_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: study-planner/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Tests (embedded Postgres + real Postgres 16, which exercises lock contention)
+        run: npm test
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/cramless_test
+          DATABASE_SSL: disable
+      - run: npm run build
