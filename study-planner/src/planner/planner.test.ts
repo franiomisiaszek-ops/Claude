@@ -162,6 +162,14 @@ describe('planner', () => {
     expect(newMinutes(second.sessions)).toBe(160);
   });
 
+  it("drops today's frozen placeholder once real material is added", () => {
+    const first = plan(base({ deadlines: [deadline('geo', 'hist', 6)] }));
+    expect(first.sessions.some((s) => s.date === TODAY && s.materialId === 'auto:geo')).toBe(true);
+    const second = plan(base({ deadlines: [deadline('geo', 'hist', 6)], materials: [material('rivers', 'hist', 'geo', 10)], sessions: first.sessions, freezeToday: true }));
+    expect(second.sessions.some((s) => s.materialId === 'auto:geo')).toBe(false);
+    expect(newMinutes(second.sessions)).toBe(40);
+  });
+
   it('never schedules on blocked days', () => {
     const blocks = [{ id: 'b', start: addDays(TODAY, 2), end: addDays(TODAY, 4) }];
     const { sessions } = plan({ ...single(), blocks });

@@ -147,6 +147,16 @@ export function plan(input: PlanInput): PlanResult {
   const deadlineById = new Map(input.deadlines.map((d) => [d.id, d]));
   const todayBlocked = isBlocked(today, input.blocks);
 
+  // A frozen session only stays if what it studies still needs studying.
+  const stillValid = (materialId: string) => {
+    if (materialId.startsWith('auto:')) {
+      const dl = deadlineById.get(materialId.slice(5));
+      return !!dl && dl.status === 'active' && !input.materials.some((m) => m.deadlineId === dl.id);
+    }
+    const m = input.materials.find((x) => x.id === materialId);
+    return !!m && !m.done;
+  };
+
   // 1–2. History and fixed sessions.
   const history: Session[] = [];
   const fixed: Session[] = [];
@@ -154,7 +164,7 @@ export function plan(input: PlanInput): PlanResult {
     if (s.date < today) history.push(s.status === 'planned' ? { ...s, status: 'missed' } : s);
     else if (s.status !== 'planned') fixed.push(s);
     else if (s.pinned) fixed.push(s);
-    else if (s.date === today && input.freezeToday && !todayBlocked) fixed.push(s);
+    else if (s.date === today && input.freezeToday && !todayBlocked && s.kind === 'new' && stillValid(s.materialId)) fixed.push(s);
   }
   const kept = [...history, ...fixed];
   const keptIds = new Set(kept.map((s) => s.id));

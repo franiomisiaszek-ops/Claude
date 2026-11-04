@@ -160,6 +160,8 @@ export interface PlanDiff {
   removed: number;
   changed: number;
   summary: string;
+  /** The user action that triggered this re-plan (undoable), if any. */
+  cause?: string;
 }
 
 export interface Source {

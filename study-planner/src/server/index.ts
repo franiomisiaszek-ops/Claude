@@ -66,7 +66,7 @@ const mutate = (label: string | null, fn: Handler) => async (req: Request, res: 
   if (label) snapshot(db, label);
   try {
     await fn(db, req);
-    replan(db);
+    replan(db, label ?? undefined);
     save();
     res.json(publicState(db));
   } catch (e) {

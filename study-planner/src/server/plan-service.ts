@@ -5,7 +5,7 @@ import { diffPlans, plan } from '../planner/planner';
 export const todayFor = (db: DB) => localParts(db.settings.timezone).date;
 
 /** Re-plans from today and records health plus a diff against the previous plan. */
-export function replan(db: DB): void {
+export function replan(db: DB, cause?: string): void {
   const today = todayFor(db);
   const before = db.sessions;
   const result = plan({
@@ -26,7 +26,7 @@ export function replan(db: DB): void {
   db.planMeta = {
     lastPlanDate: today,
     health: result.health,
-    diff: diff.added + diff.removed + diff.changed > 0 ? diff : db.planMeta.diff,
+    diff: { ...diff, cause },
     plannedAt: new Date().toISOString(),
   };
 }
