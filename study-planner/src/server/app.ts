@@ -386,6 +386,16 @@ export function createApp({ db, auth }: AppDeps) {
     }),
   );
 
+  api.post(
+    '/deadlines/:id/link',
+    mutate('Linked material to an exam', (st, { req }) => {
+      const d = st.deadlines.find((x) => x.id === req.params.id);
+      need(d, 'Deadline not found');
+      const ids = new Set<string>(Array.isArray(req.body?.materialIds) ? req.body.materialIds.map(String) : []);
+      for (const m of st.materials) if (ids.has(m.id) && m.courseId === d!.courseId) m.deadlineId = d!.id;
+    }),
+  );
+
   api.delete(
     '/deadlines/:id',
     mutate('Deleted a deadline', (st, { req }) => {
@@ -421,17 +431,25 @@ export function createApp({ db, auth }: AppDeps) {
       const deadlineId = b.deadlineId || undefined;
       if (deadlineId) need(st.deadlines.some((d) => d.id === deadlineId), 'Deadline not found');
       const order0 = st.materials.filter((m) => m.courseId === course.id).length;
-      type Row = ReturnType<typeof parseMaterialLine>;
-      const rows: Row[] =
-        typeof b.lines === 'string'
-          ? (b.lines as string).split(/\r?\n/).slice(0, 200).map(parseMaterialLine).filter((r): r is NonNullable<Row> => !!r)
+      type Row = { title: string; unitType: UnitType; quantity: number; difficulty?: number; note?: string } | null;
+      const rows: Row[] = Array.isArray(b.items)
+        ? (b.items as any[]).slice(0, 100).map((it) => ({
+            title: str(it?.title, 'Title'),
+            unitType: oneOf(it?.unitType, UNIT_TYPES, 'Unit'),
+            quantity: num(it?.quantity, 0, 100000, 'Amount'),
+            difficulty: it?.difficulty != null ? num(it.difficulty, 1, 3, 'Difficulty') : undefined,
+            note: it?.startPage && it?.endPage ? `${it.unitType === 'slides' ? 'Slides' : 'Pages'} ${Number(it.startPage)}–${Number(it.endPage)}${b.fileName ? ` of ${String(b.fileName).slice(0, 120)}` : ''}` : undefined,
+          }))
+        : typeof b.lines === 'string'
+          ? (b.lines as string).split(/\r?\n/).slice(0, 200).map(parseMaterialLine).filter((r): r is NonNullable<ReturnType<typeof parseMaterialLine>> => !!r)
           : [null];
       need(rows.length > 0, 'Paste at least one line');
       need(st.materials.length + rows.length <= 5000, 'Too many materials');
       rows.forEach((row, i) => {
         const m: Material = { id: randomId('m_'), courseId: course.id, deadlineId, title: '', unitType: 'topics', quantity: 1, difficulty: 2, timeAdjust: 1, order: order0 + i, done: false, userEdited: [] };
         materialFields(row ?? b, m);
-        if (row && b.difficulty) m.difficulty = num(b.difficulty, 1, 3, 'Difficulty') as Difficulty;
+        if (row && !row.difficulty && b.difficulty) m.difficulty = num(b.difficulty, 1, 3, 'Difficulty') as Difficulty;
+        if (row?.note) m.note = row.note;
         need(m.title, 'Title is required');
         st.materials.push(m);
       });
@@ -719,7 +737,7 @@ export function createApp({ db, auth }: AppDeps) {
   api.delete(
     '/sources/:id',
     mutate('Removed a connected app', async (st, { req, tx, userId }) => {
-      const id = req.params.id;
+      const id = String(req.params.id);
       const src = st.sources.find((x) => x.id === id);
       need(src, 'Source not found');
       removeSource(st, id, !!req.query.keepItems);

@@ -104,7 +104,7 @@ async function extractPdf(buf: Uint8Array): Promise<ExtractedDoc> {
   }
   const chars = pages.reduce((a, p) => a + p.text.length, 0);
   const words = pages.reduce((a, p) => a + countWords(p.text), 0);
-  await pdf.destroy();
+  await (pdf as any).destroy?.();
   return {
     kind: 'pdf',
     units: totalPages,
