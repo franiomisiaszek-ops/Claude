@@ -1,12 +1,21 @@
+/**
+ * Google Classroom + Calendar, read-only, through the app's single OAuth client.
+ * Each user's refresh token is stored AES-GCM encrypted in `google_connection`.
+ */
 import crypto from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { addDays, localParts } from '../../shared/dates';
-import type { BusyEvent, DB, SourceItem } from '../../shared/types';
+import type { BusyEvent, SourceItem } from '../../shared/types';
 import { classify } from '../classify';
-import { readSecretFile, save, writeSecretFile } from '../store';
-import { ReconnectError, TransientError, type Connector } from './types';
+import { decrypt, encrypt, seal, unseal } from '../crypto';
+import type { DB } from '../db';
+import { googleConnection } from '../db/schema';
+import { env } from '../env';
+import { ReconnectError, TransientError, type Connector, type GoogleApi } from './types';
 
-/** Read-only scopes, requested together on one consent screen. */
 export const GOOGLE_SCOPES = [
+  'openid',
+  'email',
   'https://www.googleapis.com/auth/classroom.courses.readonly',
   'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
   'https://www.googleapis.com/auth/classroom.courseworkmaterials.readonly',
@@ -15,116 +24,162 @@ export const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/calendar.events.readonly',
 ];
 
-const TOKEN_FILE = 'google-tokens.json';
-
-interface Tokens {
-  access_token: string;
-  refresh_token?: string;
-  expires_at: number;
-  scope?: string;
-}
-
-const pending = new Map<string, { verifier: string; createdAt: number }>();
+export const googleRedirectUri = () => `${env.publicUrl}/oauth/google/callback`;
 const b64url = (b: Buffer) => b.toString('base64url');
 
-export function googleConnected(): boolean {
-  return !!readSecretFile<Tokens>(TOKEN_FILE)?.refresh_token;
-}
-
-export function authUrl(db: DB, redirectUri: string): string {
-  const client = db.settings.googleClient;
-  if (!client) throw new Error('Add your Google OAuth client ID and secret first.');
-  const state = b64url(crypto.randomBytes(16));
+/** Consent URL. The state is encrypted and bound to the signed-in user. */
+export function connectUrl(userId: string): string {
+  if (!env.google.clientId) throw new Error('Google is not configured on this server.');
   const verifier = b64url(crypto.randomBytes(32));
-  const challenge = b64url(crypto.createHash('sha256').update(verifier).digest());
-  for (const [k, v] of pending) if (Date.now() - v.createdAt > 15 * 60_000) pending.delete(k);
-  pending.set(state, { verifier, createdAt: Date.now() });
+  const state = seal({ u: userId, v: verifier }, 15 * 60);
   const p = new URLSearchParams({
-    client_id: client.clientId,
-    redirect_uri: redirectUri,
+    client_id: env.google.clientId,
+    redirect_uri: googleRedirectUri(),
     response_type: 'code',
     scope: GOOGLE_SCOPES.join(' '),
     access_type: 'offline',
     prompt: 'consent',
     include_granted_scopes: 'true',
     state,
-    code_challenge: challenge,
+    code_challenge: b64url(crypto.createHash('sha256').update(verifier).digest()),
     code_challenge_method: 'S256',
   });
   return `https://accounts.google.com/o/oauth2/v2/auth?${p}`;
 }
 
-async function tokenRequest(db: DB, body: Record<string, string>): Promise<Tokens> {
-  const client = db.settings.googleClient!;
+interface TokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  scope?: string;
+  id_token?: string;
+}
+
+async function tokenRequest(body: Record<string, string>): Promise<TokenResponse> {
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: client.clientId, client_secret: client.clientSecret, ...body }),
+    body: new URLSearchParams({ client_id: env.google.clientId!, client_secret: env.google.clientSecret!, ...body }),
+    signal: AbortSignal.timeout(20_000),
   });
   const json = (await res.json().catch(() => ({}))) as any;
   if (!res.ok) {
     if (json.error === 'invalid_grant') throw new ReconnectError('Google access expired or was revoked. Reconnect Google.');
+    if (res.status >= 500) throw new TransientError('Google sign-in service is unavailable right now.');
     throw new Error(`Google token error: ${json.error_description ?? json.error ?? res.status}`);
   }
+  return json as TokenResponse;
+}
+
+const emailFromIdToken = (idToken?: string): string | null => {
+  if (!idToken) return null;
+  try {
+    return JSON.parse(Buffer.from(idToken.split('.')[1], 'base64url').toString('utf8')).email ?? null;
+  } catch {
+    return null;
+  }
+};
+
+/** Exchanges the code and stores encrypted tokens. `sessionUserId` must match the state's user. */
+export async function finishConnect(db: DB, sessionUserId: string, code: string, state: string): Promise<{ email: string | null; missingScopes: string[] }> {
+  const st = unseal<{ u: string; v: string }>(state);
+  if (st.u !== sessionUserId) throw new Error('This Google connection was started from a different account.');
+  const t = await tokenRequest({ code, grant_type: 'authorization_code', redirect_uri: googleRedirectUri(), code_verifier: st.v });
+  const granted = new Set((t.scope ?? '').split(' '));
+  const missingScopes = GOOGLE_SCOPES.filter((s) => s.startsWith('https://') && !granted.has(s));
+  const [prev] = await db.select().from(googleConnection).where(eq(googleConnection.userId, sessionUserId));
+  const refresh = t.refresh_token ?? (prev ? decrypt(prev.refreshTokenEnc) : undefined);
+  if (!refresh) throw new Error('Google did not return offline access. Please try connecting again.');
+  const email = emailFromIdToken(t.id_token);
+  const row = {
+    userId: sessionUserId,
+    googleEmail: email,
+    refreshTokenEnc: encrypt(refresh),
+    accessTokenEnc: encrypt(t.access_token),
+    expiresAt: new Date(Date.now() + (t.expires_in ?? 3600) * 1000),
+    scope: t.scope ?? null,
+    updatedAt: new Date(),
+  };
+  await db.insert(googleConnection).values(row).onConflictDoUpdate({ target: googleConnection.userId, set: row });
+  return { email, missingScopes };
+}
+
+export async function disconnectGoogle(db: DB, userId: string): Promise<void> {
+  const [row] = await db.select().from(googleConnection).where(eq(googleConnection.userId, userId));
+  if (!row) return;
+  try {
+    await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(decrypt(row.refreshTokenEnc))}`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    // Revocation is best effort; the stored token is deleted either way.
+  }
+  await db.delete(googleConnection).where(eq(googleConnection.userId, userId));
+}
+
+export async function googleStatus(db: DB, userId: string): Promise<{ connected: boolean; email?: string | null }> {
+  const [row] = await db.select({ email: googleConnection.googleEmail }).from(googleConnection).where(eq(googleConnection.userId, userId));
+  return row ? { connected: true, email: row.email } : { connected: false };
+}
+
+/** An authorized client that refreshes the access token when needed. */
+export async function googleApi(db: DB, userId: string): Promise<GoogleApi> {
+  const [row] = await db.select().from(googleConnection).where(eq(googleConnection.userId, userId));
+  if (!row) throw new ReconnectError('Google is not connected.');
+  let access = row.accessTokenEnc ? decrypt(row.accessTokenEnc) : '';
+  let expiresAt = row.expiresAt?.getTime() ?? 0;
+  const refresh = async () => {
+    const t = await tokenRequest({ refresh_token: decrypt(row.refreshTokenEnc), grant_type: 'refresh_token' });
+    access = t.access_token;
+    expiresAt = Date.now() + (t.expires_in ?? 3600) * 1000;
+    await db
+      .update(googleConnection)
+      .set({
+        accessTokenEnc: encrypt(access),
+        expiresAt: new Date(expiresAt),
+        ...(t.refresh_token ? { refreshTokenEnc: encrypt(t.refresh_token) } : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(googleConnection.userId, userId));
+  };
   return {
-    access_token: json.access_token,
-    refresh_token: json.refresh_token,
-    expires_at: Date.now() + (json.expires_in ?? 3600) * 1000,
-    scope: json.scope,
+    async get(url: string) {
+      if (!access || expiresAt - 60_000 < Date.now()) await refresh();
+      for (let attempt = 0; attempt < 2; attempt++) {
+        let res: Response;
+        try {
+          res = await fetch(url, { headers: { Authorization: `Bearer ${access}` }, signal: AbortSignal.timeout(30_000) });
+        } catch (e) {
+          throw new TransientError(`Network error talking to Google: ${(e as Error).message}`);
+        }
+        if (res.status === 401 && attempt === 0) {
+          await refresh();
+          continue;
+        }
+        const json = (await res.json().catch(() => ({}))) as any;
+        if (res.ok) return json;
+        const msg = json?.error?.message ?? `HTTP ${res.status}`;
+        if (res.status === 429 || res.status >= 500) throw new TransientError(`Google API: ${msg}`);
+        if (res.status === 401) throw new ReconnectError('Google rejected the stored sign-in. Reconnect Google.');
+        throw new Error(`Google API: ${msg}`);
+      }
+      throw new ReconnectError('Google rejected the stored sign-in. Reconnect Google.');
+    },
   };
 }
 
-export async function handleCallback(db: DB, redirectUri: string, code: string, state: string): Promise<void> {
-  const p = pending.get(state);
-  if (!p) throw new Error('This sign-in link expired. Please try connecting again.');
-  pending.delete(state);
-  const tokens = await tokenRequest(db, { code, grant_type: 'authorization_code', redirect_uri: redirectUri, code_verifier: p.verifier });
-  const prev = readSecretFile<Tokens>(TOKEN_FILE);
-  writeSecretFile(TOKEN_FILE, { ...tokens, refresh_token: tokens.refresh_token ?? prev?.refresh_token });
-}
-
-async function accessToken(db: DB, force = false): Promise<string> {
-  const t = readSecretFile<Tokens>(TOKEN_FILE);
-  if (!t?.refresh_token) throw new ReconnectError('Google is not connected.');
-  if (!force && t.expires_at - 60_000 > Date.now()) return t.access_token;
-  const fresh = await tokenRequest(db, { refresh_token: t.refresh_token, grant_type: 'refresh_token' });
-  writeSecretFile(TOKEN_FILE, { ...t, ...fresh, refresh_token: fresh.refresh_token ?? t.refresh_token });
-  return fresh.access_token;
-}
-
-async function gget(db: DB, url: string): Promise<any> {
-  let token = await accessToken(db);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    let res: Response;
-    try {
-      res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
-    } catch (e) {
-      throw new TransientError(`Network error talking to Google: ${(e as Error).message}`);
-    }
-    if (res.status === 401 && attempt === 0) {
-      token = await accessToken(db, true);
-      continue;
-    }
-    const json = (await res.json().catch(() => ({}))) as any;
-    if (res.ok) return json;
-    const msg = json?.error?.message ?? `HTTP ${res.status}`;
-    if (res.status === 429 || res.status >= 500) throw new TransientError(`Google API: ${msg}`);
-    if (res.status === 401) throw new ReconnectError('Google rejected the stored sign-in. Reconnect Google.');
-    throw new Error(`Google API: ${msg}`);
-  }
-  throw new ReconnectError('Google rejected the stored sign-in. Reconnect Google.');
-}
-
-async function listAll(db: DB, url: string, key: string): Promise<any[]> {
+async function listAll(google: GoogleApi, url: string, key: string, maxPages = 20): Promise<any[]> {
   const out: any[] = [];
   let pageToken: string | undefined;
+  let pages = 0;
   do {
     const u = new URL(url);
     if (pageToken) u.searchParams.set('pageToken', pageToken);
-    const json = await gget(db, u.toString());
+    const json = await google.get(u.toString());
     out.push(...(json[key] ?? []));
     pageToken = json.nextPageToken;
-  } while (pageToken);
+  } while (pageToken && ++pages < maxPages);
   return out;
 }
 
@@ -137,16 +192,17 @@ function classroomDue(dueDate: any, dueTime: any, tz: string): string | undefine
 
 const CLASSROOM = 'https://classroom.googleapis.com/v1';
 
-export const syncClassroom: Connector = async ({ db, source, tz, today }) => {
-  const courses = await listAll(db, `${CLASSROOM}/courses?studentId=me&courseStates=ACTIVE&pageSize=100`, 'courses');
+export const syncClassroom: Connector = async ({ google, tz, today }) => {
+  if (!google) throw new ReconnectError('Google is not connected.');
+  const courses = await listAll(google, `${CLASSROOM}/courses?studentId=me&courseStates=ACTIVE&pageSize=100`, 'courses');
   const items: SourceItem[] = [];
   const calendarIds: string[] = [];
   for (const c of courses) {
     if (c.calendarId) calendarIds.push(c.calendarId);
     const [work, mats, subs] = await Promise.all([
-      listAll(db, `${CLASSROOM}/courses/${c.id}/courseWork?pageSize=100`, 'courseWork'),
-      listAll(db, `${CLASSROOM}/courses/${c.id}/courseWorkMaterials?pageSize=100`, 'courseWorkMaterial').catch(() => []),
-      listAll(db, `${CLASSROOM}/courses/${c.id}/courseWork/-/studentSubmissions?userId=me&pageSize=100`, 'studentSubmissions').catch(() => []),
+      listAll(google, `${CLASSROOM}/courses/${c.id}/courseWork?pageSize=100`, 'courseWork'),
+      listAll(google, `${CLASSROOM}/courses/${c.id}/courseWorkMaterials?pageSize=100`, 'courseWorkMaterial').catch(() => []),
+      listAll(google, `${CLASSROOM}/courses/${c.id}/courseWork/-/studentSubmissions?userId=me&pageSize=100`, 'studentSubmissions').catch(() => []),
     ]);
     const doneIds = new Set(subs.filter((s: any) => s.state === 'TURNED_IN' || s.state === 'RETURNED').map((s: any) => s.courseWorkId));
     const examsByTopic = new Map<string, { id: string; due: string }>();
@@ -165,6 +221,7 @@ export const syncClassroom: Connector = async ({ db, source, tz, today }) => {
         unitType: kind === 'material' ? 'topics' : undefined,
         quantity: kind === 'material' ? 1 : undefined,
         link: w.alternateLink,
+        description: typeof w.description === 'string' ? w.description.slice(0, 4000) : undefined,
       });
       if ((kind === 'exam' || kind === 'quiz') && w.topicId && due && due > today) {
         const prev = examsByTopic.get(w.topicId);
@@ -182,12 +239,11 @@ export const syncClassroom: Connector = async ({ db, source, tz, today }) => {
         quantity: Math.max(1, Math.min(5, m.materials?.length ?? 1)),
         deadlineExternalId: m.topicId ? examsByTopic.get(m.topicId)?.id : undefined,
         link: m.alternateLink,
+        description: typeof m.description === 'string' ? m.description.slice(0, 4000) : undefined,
       });
     }
   }
-  source.config.courseCalendarIds = calendarIds;
-  save();
-  return { items, complete: true };
+  return { items, complete: true, configPatch: { courseCalendarIds: calendarIds } };
 };
 
 /** Strips study keywords to guess the subject: "Chemistry exam" → "Chemistry". */
@@ -200,14 +256,15 @@ export function guessCourse(title: string): string {
   return cleaned.split(' ').slice(0, 3).join(' ') || 'General';
 }
 
-export async function listCalendars(db: DB): Promise<{ id: string; summary: string; primary: boolean }[]> {
-  const cals = await listAll(db, 'https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250', 'items');
-  const skip = new Set(db.sources.flatMap((s) => s.config.courseCalendarIds ?? []));
+export async function listCalendars(google: GoogleApi, skipIds: string[]): Promise<{ id: string; summary: string; primary: boolean }[]> {
+  const cals = await listAll(google, 'https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250', 'items');
+  const skip = new Set(skipIds);
   return cals.filter((c: any) => !skip.has(c.id)).map((c: any) => ({ id: c.id, summary: c.summaryOverride ?? c.summary, primary: !!c.primary }));
 }
 
-export const syncCalendar: Connector = async ({ db, source, tz, today }) => {
-  const skip = new Set(db.sources.flatMap((s) => s.config.courseCalendarIds ?? []));
+export const syncCalendar: Connector = async ({ google, source, state, tz, today }) => {
+  if (!google) throw new ReconnectError('Google is not connected.');
+  const skip = new Set(state.sources.flatMap((s) => s.config.courseCalendarIds ?? []));
   const ids = (source.config.calendarIds?.length ? source.config.calendarIds : ['primary']).filter((id) => !skip.has(id));
   const start = today;
   const end = addDays(today, 120);
@@ -221,7 +278,7 @@ export const syncCalendar: Connector = async ({ db, source, tz, today }) => {
       orderBy: 'startTime',
       maxResults: '2500',
     });
-    const events = await listAll(db, `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?${p}`, 'items');
+    const events = await listAll(google, `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?${p}`, 'items', 5);
     for (const ev of events) {
       if (ev.status === 'cancelled') continue;
       const allDay = !!ev.start?.date;

@@ -1,10 +1,17 @@
-import type { DB, ISODate, Source, SyncResult } from '../../shared/types';
+import type { ISODate, Source, SyncResult, UserState } from '../../shared/types';
+
+/** Authorized Google API access for one user (handles token refresh). */
+export interface GoogleApi {
+  get(url: string): Promise<any>;
+}
 
 export interface ConnectorContext {
   source: Source;
-  db: DB;
+  /** Read-only view of the user's data. */
+  state: UserState;
   tz: string;
   today: ISODate;
+  google?: GoogleApi;
 }
 
 export type Connector = (ctx: ConnectorContext) => Promise<SyncResult>;

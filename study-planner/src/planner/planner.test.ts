@@ -16,6 +16,7 @@ const deadline = (id: string, courseId: string, dueIn: number, kind: Deadline['k
   status: 'active',
   userEdited: [],
   confidence: 1,
+  timeAdjust: 1,
 });
 const material = (id: string, courseId: string, deadlineId: string | undefined, pages: number, order = 0): Material => ({
   id,
@@ -25,6 +26,7 @@ const material = (id: string, courseId: string, deadlineId: string | undefined, 
   unitType: 'pages',
   quantity: pages,
   difficulty: 2,
+  timeAdjust: 1,
   order,
   done: false,
   userEdited: [],
@@ -163,9 +165,10 @@ describe('planner', () => {
   });
 
   it("drops today's frozen placeholder once real material is added", () => {
-    const first = plan(base({ deadlines: [deadline('geo', 'hist', 6)] }));
+    const geo = { ...deadline('geo', 'hist', 6), roughMinutes: 120 };
+    const first = plan(base({ deadlines: [geo] }));
     expect(first.sessions.some((s) => s.date === TODAY && s.materialId === 'auto:geo')).toBe(true);
-    const second = plan(base({ deadlines: [deadline('geo', 'hist', 6)], materials: [material('rivers', 'hist', 'geo', 10)], sessions: first.sessions, freezeToday: true }));
+    const second = plan(base({ deadlines: [geo], materials: [material('rivers', 'hist', 'geo', 10)], sessions: first.sessions, freezeToday: true }));
     expect(second.sessions.some((s) => s.materialId === 'auto:geo')).toBe(false);
     expect(newMinutes(second.sessions)).toBe(40);
   });
@@ -254,10 +257,41 @@ describe('planner', () => {
     expect(health.deadlines[0].fixes.length).toBeGreaterThan(0);
   });
 
-  it('creates a default block of work for deadlines without material', () => {
-    const { sessions } = plan(base({ deadlines: [deadline('essay', 'hist', 6, 'assignment')] }));
+  it('never invents time for a deadline without material, and says so', () => {
+    const { sessions, health } = plan(base({ deadlines: [deadline('essay', 'hist', 6, 'assignment'), deadline('test', 'bio', 10, 'exam')] }));
+    expect(sessions).toHaveLength(0);
+    expect(health.deadlines.every((h) => h.needsMaterial)).toBe(true);
+    expect(health.status).toBe('atRisk'); // an exam within 3 weeks can't be planned yet
+  });
+
+  it('uses a time the user chose when the material is not known yet', () => {
+    const essay = { ...deadline('essay', 'hist', 6, 'assignment'), roughMinutes: 90 };
+    const { sessions } = plan(base({ deadlines: [essay] }));
     expect(newMinutes(sessions, 'auto:essay')).toBe(90);
     expect(sessions.every((s) => s.kind === 'new')).toBe(true); // assignments get no reviews
+    expect(sessions[0].reasons.some((r) => r.code === 'rough')).toBe(true);
+  });
+
+  it('adds practice time for "more time for this exam" and for a learned factor', () => {
+    const more = { ...deadline('bio', 'bio', 10), timeAdjust: 1.5 };
+    const a = plan(base({ deadlines: [more], materials: [material('ch1', 'bio', 'bio', 20)] })); // 80 min coverage
+    expect(newMinutes(a.sessions, 'ch1')).toBe(80);
+    expect(newMinutes(a.sessions, 'practice:bio')).toBe(40);
+    const b = plan(base({ deadlines: [deadline('bio', 'bio', 10)], materials: [material('ch1', 'bio', 'bio', 20)], learning: { bio: { factor: 1.25 } } }));
+    expect(newMinutes(b.sessions, 'practice:bio')).toBe(20);
+    expect(b.sessions.find((s) => s.materialId === 'practice:bio')!.reasons.some((r) => r.code === 'learned')).toBe(true);
+  });
+
+  it('never cuts coverage because of a learned factor below 1', () => {
+    const { sessions } = plan(base({ deadlines: [deadline('bio', 'bio', 10)], materials: [material('ch1', 'bio', 'bio', 20)], learning: { bio: { factor: 0.7 } } }));
+    expect(newMinutes(sessions, 'ch1')).toBe(80);
+    expect(newMinutes(sessions, 'practice:bio')).toBe(0);
+  });
+
+  it('applies "less time for this exam" to coverage, and per-item more/less time', () => {
+    const less = { ...deadline('bio', 'bio', 10), timeAdjust: 0.5 };
+    const { sessions } = plan(base({ deadlines: [less], materials: [{ ...material('ch1', 'bio', 'bio', 20), timeAdjust: 1.5 }] }));
+    expect(newMinutes(sessions, 'ch1')).toBe(60); // 80 × 1.5 × 0.5
   });
 
   it('prioritises the earlier deadline when time is tight', () => {

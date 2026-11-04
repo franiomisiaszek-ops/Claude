@@ -1,29 +1,32 @@
 import { addDays, localParts } from '../shared/dates';
-import type { DB } from '../shared/types';
+import type { UserState } from '../shared/types';
 import { diffPlans, plan } from '../planner/planner';
+import { learnedFactors } from '../planner/learning';
+import { randomId } from './crypto';
 
-export const todayFor = (db: DB) => localParts(db.settings.timezone).date;
+export const todayFor = (state: Pick<UserState, 'settings'>) => localParts(state.settings.timezone).date;
 
 /** Re-plans from today and records health plus a diff against the previous plan. */
-export function replan(db: DB, cause?: string): void {
-  const today = todayFor(db);
-  const before = db.sessions;
+export function replan(state: UserState, cause?: string): void {
+  const today = todayFor(state);
+  const before = state.sessions;
   const result = plan({
     today,
-    freezeToday: db.planMeta.lastPlanDate === today,
-    settings: db.settings,
-    availability: db.availability,
-    blocks: db.blocks,
-    busy: db.busy,
-    courses: db.courses,
-    deadlines: db.deadlines,
-    materials: db.materials,
-    sessions: db.sessions,
+    freezeToday: state.planMeta.lastPlanDate === today,
+    settings: state.settings,
+    availability: state.availability,
+    blocks: state.blocks,
+    busy: state.busy,
+    courses: state.courses,
+    deadlines: state.deadlines,
+    materials: state.materials,
+    sessions: state.sessions,
+    learning: learnedFactors(state.results, state.courses, state.settings),
   });
   const cutoff = addDays(today, -120);
-  db.sessions = result.sessions.filter((s) => s.date >= cutoff);
+  state.sessions = result.sessions.filter((s) => s.date >= cutoff);
   const diff = diffPlans(before, result.sessions, today);
-  db.planMeta = {
+  state.planMeta = {
     lastPlanDate: today,
     health: result.health,
     diff: { ...diff, cause },
@@ -32,23 +35,24 @@ export function replan(db: DB, cause?: string): void {
 }
 
 /** Saves a restorable copy of user-editable state before a user change (keeps the last 2). */
-export function snapshot(db: DB, label: string): void {
-  const state = structuredClone({
-    availability: db.availability,
-    blocks: db.blocks,
-    courses: db.courses,
-    deadlines: db.deadlines,
-    materials: db.materials,
-    sessions: db.sessions,
+export function snapshot(state: UserState, label: string): void {
+  const copy = structuredClone({
+    availability: state.availability,
+    blocks: state.blocks,
+    courses: state.courses,
+    deadlines: state.deadlines,
+    materials: state.materials,
+    sessions: state.sessions,
   });
-  db.snapshots = [...db.snapshots, { createdAt: new Date().toISOString(), label, state }].slice(-2);
+  state.snapshots = [...state.snapshots, { id: randomId('snap_'), createdAt: new Date().toISOString(), label, state: copy }].slice(-2);
 }
 
-export function undo(db: DB): boolean {
-  const snap = db.snapshots.pop();
+export function undo(state: UserState): boolean {
+  const snap = state.snapshots.at(-1);
   if (!snap) return false;
-  Object.assign(db, structuredClone(snap.state));
-  replan(db);
-  db.planMeta.diff = { added: 0, removed: 0, changed: 0, summary: `Undid: ${snap.label}` };
+  state.snapshots = state.snapshots.slice(0, -1);
+  Object.assign(state, structuredClone(snap.state));
+  replan(state);
+  state.planMeta.diff = { added: 0, removed: 0, changed: 0, summary: `Undid: ${snap.label}` };
   return true;
 }

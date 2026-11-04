@@ -7,28 +7,29 @@ export type Difficulty = 1 | 2 | 3;
 export type SessionStatus = 'planned' | 'done' | 'partial' | 'skipped' | 'missed';
 export type SourceType = 'demo' | 'ics' | 'google-classroom' | 'google-calendar';
 
-export interface EmailSettings {
-  host: string;
-  port: number;
-  secure: boolean;
-  user: string;
-  pass: string;
-  from: string;
-  to: string;
+/** A grade as the user entered it, in their grading scale. */
+export interface GradeValue {
+  scale: string;
+  value: number | string;
+  /** For "points" scales: the maximum. */
+  max?: number;
 }
 
 export interface Settings {
   onboarded: boolean;
   timezone: string;
-  /** Local time for the daily digest, `HH:MM`. */
+  /** Local time for the daily reminder, `HH:MM`. */
   digestTime: string;
   /** Plan to this fraction of available time so small misses are absorbed. */
   slack: number;
   minChunk: number;
   maxSession: number;
   maxSubjects: number;
-  email?: EmailSettings;
-  googleClient?: { clientId: string; clientSecret: string };
+  /** The user's usual grading scale (see shared/grades.ts). */
+  gradeScale: string;
+  /** Default target grade for exams, in the user's scale. */
+  targetGrade?: GradeValue;
+  reminders: { push: boolean; email: boolean };
 }
 
 export interface Availability {
@@ -67,8 +68,15 @@ export interface Course {
   id: string;
   name: string;
   color: string;
+  /** Reading-speed factor learned from logged session times. */
   calibrationFactor: number;
   samples: number;
+  /** Target grade for this course (defaults to the user's). */
+  targetGrade?: GradeValue;
+  /** Grading scale used in this course (defaults to the user's). */
+  gradeScale?: string;
+  /** "Don't adjust this course from my grades." */
+  learningLocked?: boolean;
 }
 
 export interface Deadline {
@@ -82,6 +90,16 @@ export interface Deadline {
   /** Fields the user changed by hand; sync never overwrites these silently. */
   userEdited: string[];
   confidence: number;
+  /**
+   * Only when the user explicitly chose a guess because the material isn't known yet.
+   * Without material and without this, the deadline gets no study time and asks for material.
+   */
+  roughMinutes?: number;
+  /** `user`: a number the user typed; `history`: copied from a similar past exam. */
+  roughSource?: 'user' | 'history';
+  /** "More / less time for this exam" (1 = no change). Applies to this deadline only. */
+  timeAdjust: number;
+  targetGrade?: GradeValue;
 }
 
 export interface Material {
@@ -91,7 +109,10 @@ export interface Material {
   title: string;
   unitType: UnitType;
   quantity: number;
+  /** How hard this is for the user: 1 easy, 2 normal, 3 hard. */
   difficulty: Difficulty;
+  /** "More / less time on this" (1 = no change). Applies to this item only. */
+  timeAdjust: number;
   estimateOverride?: number;
   order: number;
   availableFrom?: ISODate;
@@ -99,6 +120,9 @@ export interface Material {
   origin?: Origin;
   userEdited: string[];
   link?: string;
+  note?: string;
+  /** Rated weak after an exam: gets a bigger share of practice time. */
+  weak?: boolean;
 }
 
 export type ReasonCode =
@@ -109,7 +133,11 @@ export type ReasonCode =
   | 'selfPaced'
   | 'review'
   | 'bufferReview'
-  | 'pinned';
+  | 'pinned'
+  | 'rough'
+  | 'learned'
+  | 'practice'
+  | 'weak';
 
 export interface Reason {
   code: ReasonCode;
@@ -119,12 +147,14 @@ export interface Reason {
   doneMin?: number;
   totalMin?: number;
   offset?: number;
+  /** For `learned`: the multiplier applied from past results. */
+  factor?: number;
 }
 
 export interface Session {
   id: string;
   date: ISODate;
-  /** Material studied. For a deadline with no materials this is `auto:<deadlineId>`. */
+  /** Material studied. For a rough-guess deadline this is `auto:<deadlineId>`. */
   materialId: string;
   /** For combined review sessions, every material covered. */
   reviewMaterialIds?: string[];
@@ -147,6 +177,8 @@ export interface DeadlineHealth {
   plannedMin: number;
   shortfallMin: number;
   bufferShrunk: boolean;
+  /** No material and no rough guess: nothing can be planned until the user adds material. */
+  needsMaterial?: boolean;
   fixes: string[];
 }
 
@@ -204,18 +236,58 @@ export interface InboxEntry {
 
 export interface DigestLog {
   date: ISODate;
-  channel: 'email' | 'browser';
+  channel: 'email' | 'push';
   sentAt: string;
 }
 
 export interface Snapshot {
+  id: string;
   createdAt: string;
   label: string;
-  state: Pick<DB, 'availability' | 'blocks' | 'courses' | 'deadlines' | 'materials' | 'sessions'>;
+  state: Pick<UserState, 'availability' | 'blocks' | 'courses' | 'deadlines' | 'materials' | 'sessions'>;
 }
 
-export interface DB {
-  version: 1;
+export type TopicRating = 'weak' | 'ok' | 'strong' | 'not_on_exam';
+
+/** The post-exam debrief and (possibly later) grade, with the effort numbers at the exam date. */
+export interface ExamResult {
+  id: string;
+  deadlineId: string;
+  courseId: string;
+  title: string;
+  kind: DeadlineKind;
+  dueAt: ISODate;
+  /** Null until the grade is known. */
+  grade?: GradeValue;
+  /** Grade on a 0–1 scale; null until known. */
+  score?: number;
+  /** Target on a 0–1 scale at the time. */
+  target: number;
+  minutesInApp: number;
+  minutesOutside: number;
+  /** Material-based estimate (coverage, before learning and one-off adjustments). */
+  baseEstimateMin: number;
+  /** -1 easier than expected, 0 as expected, 1 harder. */
+  feltDifficulty?: number;
+  topicRatings: Record<string, TopicRating>;
+  /** Left out of learning, e.g. "I was sick". */
+  excluded: boolean;
+  note?: string;
+  gradeDueAt?: ISODate;
+  reminderCount: number;
+  recordedAt: string;
+  gradedAt?: string;
+}
+
+export interface PlanMeta {
+  lastPlanDate?: ISODate;
+  health: Health;
+  diff?: PlanDiff;
+  plannedAt?: string;
+}
+
+/** Everything that belongs to one user. Loaded, changed in memory, then saved as a diff. */
+export interface UserState {
   settings: Settings;
   availability: Availability;
   blocks: Block[];
@@ -228,7 +300,8 @@ export interface DB {
   inbox: InboxEntry[];
   snapshots: Snapshot[];
   digestLog: DigestLog[];
-  planMeta: { lastPlanDate?: ISODate; health: Health; diff?: PlanDiff; plannedAt?: string };
+  results: ExamResult[];
+  planMeta: PlanMeta;
 }
 
 /** Normalised item a connector reports. */
@@ -245,6 +318,8 @@ export interface SourceItem {
   /** externalId of the deadline this material prepares for, from the same source. */
   deadlineExternalId?: string;
   link?: string;
+  /** Free text from the source (e.g. a Classroom description), used for AI scope extraction. */
+  description?: string;
 }
 
 export interface SyncResult {
@@ -257,16 +332,25 @@ export interface SyncResult {
   notModified?: boolean;
   etag?: string;
   lastModified?: string;
+  /** Changes to the source's own config learned during sync. */
+  configPatch?: Partial<Source['config']>;
 }
 
-/** What the browser receives: the DB with secrets removed. */
-export type PublicState = Omit<DB, 'settings' | 'snapshots'> & {
-  settings: Omit<Settings, 'email' | 'googleClient'> & {
-    email?: Omit<EmailSettings, 'pass'> & { hasPass: boolean };
-    googleClient?: { clientId: string; hasSecret: boolean };
-  };
+export interface PublicUser {
+  id: string;
+  name: string;
+  email: string;
+  emailVerified: boolean;
+  image?: string | null;
+}
+
+/** What the browser receives for the signed-in user. */
+export type PublicState = Omit<UserState, 'snapshots'> & {
   canUndo: string | null;
-  googleConnected: boolean;
-  redirectUri: string;
   today: ISODate;
+  user: PublicUser;
+  google: { available: boolean; connected: boolean; email?: string | null };
+  features: { ai: boolean; push: boolean; email: boolean };
+  vapidPublicKey?: string;
+  ai: { usedToday: number; dailyLimit: number };
 };

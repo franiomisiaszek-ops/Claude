@@ -21,5 +21,15 @@ export function explain(r: Reason): string {
       return `Review day before ${r.title}: no new material, just consolidation`;
     case 'pinned':
       return 'You placed this session yourself, so re-planning leaves it alone';
+    case 'rough':
+      return 'Uses the time you chose for this, because its material isn\'t listed yet';
+    case 'learned':
+      return `Your past grades in this course suggest ×${(r.factor ?? 1).toFixed(2)} the material time to reach your target`;
+    case 'practice':
+      return 'Extra practice beyond one pass through the material: from "more time" you asked for or what your grades showed you need';
+    case 'weak':
+      return 'You marked this as a weak topic after an exam, so it gets extra review';
+    default:
+      return '';
   }
 }

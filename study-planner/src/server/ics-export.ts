@@ -1,6 +1,6 @@
 import { addDays, hhmmToMin, minToHhmm } from '../shared/dates';
-import type { DB } from '../shared/types';
-import { sessionTitle } from './digest';
+import type { UserState } from '../shared/types';
+import { sessionTitle } from '../shared/labels';
 import { todayFor } from './plan-service';
 
 const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
@@ -28,14 +28,14 @@ const ymd = (d: string) => d.replace(/-/g, '');
  * The plan as an .ics file. Sessions get times inside the study window when one is set,
  * otherwise they are all-day events. Each has an alarm so the calendar app reminds you.
  */
-export function exportIcs(db: DB): string {
+export function exportIcs(db: UserState): string {
   const today = todayFor(db);
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
-  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Study Planner//EN', 'CALSCALE:GREGORIAN', 'X-WR-CALNAME:Study plan'];
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Cramless//Study Plan//EN', 'CALSCALE:GREGORIAN', 'X-WR-CALNAME:Study plan'];
   const win = db.availability.studyWindow;
   const cursor = new Map<string, number>();
   for (const s of db.sessions.filter((x) => x.date >= today && x.status === 'planned')) {
-    lines.push('BEGIN:VEVENT', `UID:${s.id}@study-planner`, `DTSTAMP:${stamp}`);
+    lines.push('BEGIN:VEVENT', `UID:${s.id}@cramless`, `DTSTAMP:${stamp}`);
     if (win) {
       const start = cursor.get(s.date) ?? hhmmToMin(win.start);
       const end = start + s.minutes;
@@ -51,7 +51,7 @@ export function exportIcs(db: DB): string {
     const course = db.courses.find((c) => c.id === d.courseId)?.name ?? '';
     lines.push(
       'BEGIN:VEVENT',
-      `UID:${d.id}@study-planner`,
+      `UID:${d.id}@cramless`,
       `DTSTAMP:${stamp}`,
       `DTSTART;VALUE=DATE:${ymd(d.dueAt)}`,
       `DTEND;VALUE=DATE:${ymd(addDays(d.dueAt, 1))}`,

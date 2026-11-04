@@ -3,6 +3,7 @@ import { addDays, localParts } from '../../shared/dates';
 import type { BusyEvent, SourceItem } from '../../shared/types';
 import { classify, splitCourse } from '../classify';
 import { guessCourse } from './google';
+import { FetchBlockedError, safeFetch } from '../safe-fetch';
 import { TransientError, type Connector } from './types';
 
 const ymdLocal = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -69,27 +70,24 @@ export function parseFeed(text: string, opts: { tz: string; today: string; feedT
 export const syncIcs: Connector = async ({ source, tz, today }) => {
   const url = (source.config.url ?? '').trim().replace(/^webcal:/i, 'https:');
   if (!/^https?:\/\//i.test(url)) throw new Error('Feed URL must start with https:// or webcal://');
-  const headers: Record<string, string> = { Accept: 'text/calendar, */*' };
+  const headers: Record<string, string> = {};
   if (source.etag) headers['If-None-Match'] = source.etag;
   if (source.lastModified) headers['If-Modified-Since'] = source.lastModified;
-  let res: Response;
+  let res;
   try {
-    res = await fetch(url, { headers, redirect: 'follow', signal: AbortSignal.timeout(30_000) });
+    res = await safeFetch(url, { headers, timeoutMs: 30_000, maxBytes: 8_000_000 });
   } catch (e) {
+    if (e instanceof FetchBlockedError) throw new Error(e.message);
     throw new TransientError(`Could not reach the feed: ${(e as Error).message}`);
   }
   if (res.status === 304) return { items: [], complete: false, notModified: true };
   if (res.status === 429 || res.status >= 500) throw new TransientError(`Feed returned HTTP ${res.status}`);
-  if (!res.ok) throw new Error(`Feed returned HTTP ${res.status}. Check that the URL is still valid.`);
-  const text = await res.text();
-  if (!text.includes('BEGIN:VCALENDAR')) throw new Error('That URL did not return an iCalendar (.ics) feed.');
-  const { items, busy, range } = parseFeed(text, { tz, today, feedType: source.config.feedType ?? 'lms', fallbackCourse: source.name });
-  return {
-    items,
-    busy,
-    complete: true,
-    range,
-    etag: res.headers.get('etag') ?? undefined,
-    lastModified: res.headers.get('last-modified') ?? undefined,
+  if (res.status < 200 || res.status >= 300) throw new Error(`Feed returned HTTP ${res.status}. Check that the URL is still valid.`);
+  if (!res.body.includes('BEGIN:VCALENDAR')) throw new Error('That URL did not return an iCalendar (.ics) feed.');
+  const { items, busy, range } = parseFeed(res.body, { tz, today, feedType: source.config.feedType ?? 'lms', fallbackCourse: source.name });
+  const header = (k: string) => {
+    const v = res.headers[k];
+    return Array.isArray(v) ? v[0] : v;
   };
+  return { items, busy, complete: true, range, etag: header('etag'), lastModified: header('last-modified') };
 };

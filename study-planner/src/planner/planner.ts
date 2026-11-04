@@ -44,6 +44,8 @@ export interface PlanInput {
   deadlines: Deadline[];
   materials: Material[];
   sessions: Session[];
+  /** Per-course time factor learned from past grades (see learning.ts). Missing = 1. */
+  learning?: Record<string, { factor: number }>;
 }
 
 export interface PlanResult {
@@ -52,12 +54,15 @@ export interface PlanResult {
 }
 
 export const BUFFER_DAYS: Record<DeadlineKind, number> = { exam: 2, quiz: 1, assignment: 1 };
-export const DEFAULT_MINUTES: Record<DeadlineKind, number> = { exam: 180, quiz: 60, assignment: 90 };
+/** Practice time is capped so the total stays within 3× the material coverage. */
+const MAX_PRACTICE_RATIO = 2;
 export const SELF_PACED_DAYS = 28;
 const REVIEW_OFFSETS = [1, 3, 7];
 const REVIEW_SHARE = 0.2;
+const WEAK_REVIEW_SHARE = 0.3;
 
 const round5 = (n: number) => Math.max(5, Math.round(n / 5) * 5);
+const round0to5 = (n: number) => (n < 5 ? 0 : Math.round(n / 5) * 5);
 
 /** Small stable string hash (FNV-1a) for deterministic session ids. */
 export function hash(s: string): string {
@@ -151,7 +156,11 @@ export function plan(input: PlanInput): PlanResult {
   const stillValid = (materialId: string) => {
     if (materialId.startsWith('auto:')) {
       const dl = deadlineById.get(materialId.slice(5));
-      return !!dl && dl.status === 'active' && !input.materials.some((m) => m.deadlineId === dl.id);
+      return !!dl && dl.status === 'active' && dl.roughMinutes != null && !input.materials.some((m) => m.deadlineId === dl.id);
+    }
+    if (materialId.startsWith('practice:')) {
+      const dl = deadlineById.get(materialId.slice(9));
+      return !!dl && dl.status === 'active';
     }
     const m = input.materials.find((x) => x.id === materialId);
     return !!m && !m.done;
@@ -190,6 +199,26 @@ export function plan(input: PlanInput): PlanResult {
   }
   const materials = [...input.materials].sort((a, b) => a.order - b.order || a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
   const hasMaterial = new Set<string>();
+  /** Extra reasons per unit (learned factor, weak topic, rough guess, practice). */
+  const unitReasons = new Map<string, Reason[]>();
+  const coverageBy = new Map<string, number>();
+  const weakBy = new Map<string, string[]>();
+  const allBy = new Map<string, string[]>();
+  const learnedFactor = (courseId: string) => input.learning?.[courseId]?.factor ?? 1;
+  const pushUnit = (key: string, u: Unit) => groups.get(key)!.units.push(u);
+  const makeUnit = (id: string, title: string, order: number, total: number, availableFrom: ISODate, done = false): Unit => {
+    const credited = creditBy.get(id) ?? 0;
+    return {
+      materialId: id,
+      title,
+      order,
+      availableFrom: availableFrom > today ? availableFrom : today,
+      total: done ? Math.max(total, credited) : total,
+      credited: done ? Math.max(total, credited) : credited,
+      remaining: done ? 0 : Math.max(0, total - credited - (fixedFutureBy.get(id) ?? 0)),
+      catchup: missedBy.has(id),
+    };
+  };
   for (const m of materials) {
     const dl = m.deadlineId ? deadlineById.get(m.deadlineId) : undefined;
     if (m.deadlineId && dl && (dl.status !== 'active' || dl.dueAt <= today)) continue; // deadline passed or done
@@ -198,35 +227,42 @@ export function plan(input: PlanInput): PlanResult {
     if (!groups.has(key)) {
       groups.set(key, { key, courseId: m.courseId, start: today, end: addDays(today, SELF_PACED_DAYS - 1), buffer: 0, units: [], required: 0 });
     }
-    const total = estimateMinutes(m, courseById.get(m.courseId));
-    const credited = creditBy.get(m.id) ?? 0;
-    const remaining = m.done ? 0 : Math.max(0, total - credited - (fixedFutureBy.get(m.id) ?? 0));
-    groups.get(key)!.units.push({
-      materialId: m.id,
-      title: m.title,
-      order: m.order,
-      availableFrom: m.availableFrom && m.availableFrom > today ? m.availableFrom : today,
-      total: m.done ? Math.max(total, credited) : total,
-      credited: m.done ? Math.max(total, credited) : credited,
-      remaining,
-      catchup: missedBy.has(m.id),
-    });
+    // "Less time for this exam" scales coverage (the user's explicit choice); "more" becomes practice.
+    const examAdjust = dl ? Math.min(1, dl.timeAdjust ?? 1) : 1;
+    const total = round5(estimateMinutes(m, courseById.get(m.courseId)) * examAdjust);
+    coverageBy.set(key, (coverageBy.get(key) ?? 0) + total);
+    allBy.set(key, [...(allBy.get(key) ?? []), m.id]);
+    if (m.weak) {
+      weakBy.set(key, [...(weakBy.get(key) ?? []), m.id]);
+      unitReasons.set(m.id, [{ code: 'weak' }]);
+    }
+    pushUnit(key, makeUnit(m.id, m.title, m.order, total, m.availableFrom ?? today, m.done));
   }
+  const needsMaterial = new Set<string>();
   for (const d of activeDeadlines) {
-    if (hasMaterial.has(d.id)) continue;
-    const id = `auto:${d.id}`;
-    const total = DEFAULT_MINUTES[d.kind];
-    const credited = creditBy.get(id) ?? 0;
-    groups.get(d.id)!.units.push({
-      materialId: id,
-      title: `Prepare: ${d.title}`,
-      order: 0,
-      availableFrom: today,
-      total,
-      credited,
-      remaining: Math.max(0, total - credited - (fixedFutureBy.get(id) ?? 0)),
-      catchup: missedBy.has(id),
-    });
+    if (hasMaterial.has(d.id)) {
+      // Practice & review time from "more time for this exam" and from what past grades showed.
+      const cov = coverageBy.get(d.id) ?? 0;
+      const g = learnedFactor(d.courseId);
+      const target = cov * Math.max(1, d.timeAdjust ?? 1) * g;
+      const practice = round0to5(Math.min(cov * MAX_PRACTICE_RATIO, Math.max(0, target - cov)));
+      if (practice > 0) {
+        const id = `practice:${d.id}`;
+        const reasons: Reason[] = [{ code: 'practice' }];
+        if (Math.abs(g - 1) >= 0.05) reasons.push({ code: 'learned', factor: g });
+        unitReasons.set(id, reasons);
+        pushUnit(d.id, makeUnit(id, `Practice: ${d.title}`, Number.MAX_SAFE_INTEGER, practice, today));
+      }
+      continue;
+    }
+    if (d.roughMinutes != null && d.roughMinutes > 0) {
+      const id = `auto:${d.id}`;
+      unitReasons.set(id, [{ code: 'rough' }]);
+      pushUnit(d.id, makeUnit(id, `Prepare: ${d.title}`, 0, Math.round(d.roughMinutes), today));
+      continue;
+    }
+    // No material and no guess the user chose: plan nothing and ask for material.
+    needsMaterial.add(d.id);
   }
   for (const g of groups.values()) {
     g.required = g.units.reduce((a, u) => a + u.remaining, 0);
@@ -368,6 +404,7 @@ export function plan(input: PlanInput): PlanResult {
       } else reasons.push({ code: 'selfPaced' });
       reasons.push({ code: 'progress', doneMin, totalMin });
       if (catchup.has(materialId)) reasons.push({ code: 'catchup' });
+      reasons.push(...(unitReasons.get(materialId) ?? []));
       return reasons;
     };
     const slots = [...retained.map((r) => ({ date: r.date, minutes: r.minutes, keep: r })), ...chunks.map((c) => ({ ...c, keep: undefined as Session | undefined }))].sort(
@@ -390,10 +427,12 @@ export function plan(input: PlanInput): PlanResult {
         const prev = created.find((s) => s.materialId === u.materialId && s.date === c.date && s.kind === 'new' && s.minutes + take <= settings.maxSession);
         if (prev) prev.minutes += take;
         else {
+          const isPractice = u.materialId.startsWith('practice:');
           created.push({
             id: makeId(u.materialId, c.date, 'new'),
             date: c.date,
             materialId: u.materialId,
+            ...(isPractice ? { reviewMaterialIds: [...(weakBy.get(g.key) ?? []), ...(allBy.get(g.key) ?? []).filter((id) => !(weakBy.get(g.key) ?? []).includes(id))] } : {}),
             deadlineId: g.deadline?.id,
             courseId: g.courseId,
             kind: 'new',
@@ -428,7 +467,12 @@ export function plan(input: PlanInput): PlanResult {
     const dl = g.deadline;
     if (!dl || dl.kind === 'assignment') continue;
     const byDate = new Map<ISODate, { ids: string[]; minutes: number; offset: number }>();
-    for (const u of g.units) {
+    // Past grades that beat the target mean less extra review (never less coverage).
+    const reviewScale = Math.min(1, learnedFactor(g.courseId));
+    const weak = new Set(weakBy.get(g.key) ?? []);
+    const studyUnits = g.units.filter((u) => !u.materialId.startsWith('practice:'));
+    if (!studyUnits.length) continue;
+    for (const u of studyUnits) {
       const learned = lastLearn.get(u.materialId);
       if (!learned) continue;
       for (const off of REVIEW_OFFSETS) {
@@ -436,13 +480,13 @@ export function plan(input: PlanInput): PlanResult {
         if (rd < firstFree || rd >= dl.dueAt) continue;
         const e = byDate.get(rd) ?? { ids: [], minutes: 0, offset: off };
         e.ids.push(u.materialId);
-        e.minutes += u.total * REVIEW_SHARE;
+        e.minutes += u.total * (weak.has(u.materialId) ? WEAK_REVIEW_SHARE : REVIEW_SHARE) * reviewScale;
         e.offset = Math.min(e.offset, off);
         byDate.set(rd, e);
       }
     }
     const bufferDays = dateRange(addDays(g.end, 1), addDays(dl.dueAt, -1));
-    const totalMin = g.units.reduce((a, u) => a + u.total, 0);
+    const totalMin = studyUnits.reduce((a, u) => a + u.total, 0) * reviewScale;
     for (const date of [...byDate.keys()].sort()) {
       if (bufferDays.includes(date) || existingReview.has(`${dl.id}|${date}`)) continue;
       const e = byDate.get(date)!;
@@ -468,7 +512,7 @@ export function plan(input: PlanInput): PlanResult {
       const want = Math.min(settings.maxSession, Math.max(30, round5(totalMin * REVIEW_SHARE)));
       const got = tryPlace(date, g.courseId, want, 15);
       if (got) {
-        const ids = g.units.map((u) => u.materialId);
+        const ids = [...studyUnits.map((u) => u.materialId)].sort((a, b) => Number(weak.has(b)) - Number(weak.has(a)));
         created.push({
           id: makeId(ids[0], date, 'review'),
           date,
@@ -490,7 +534,7 @@ export function plan(input: PlanInput): PlanResult {
   const healthRows: DeadlineHealth[] = [];
   for (const g of ordered) {
     const dl = g.deadline;
-    if (!dl) continue;
+    if (!dl || needsMaterial.has(dl.id)) continue;
     const p = placements.get(g.key)!;
     const totalMin = g.units.reduce((a, u) => a + u.total, 0);
     const doneMin = g.units.reduce((a, u) => a + Math.min(u.total, u.credited), 0);
@@ -509,7 +553,24 @@ export function plan(input: PlanInput): PlanResult {
       fixes: shortfallMin > 0 ? suggestFixes(g, shortfallMin, input) : [],
     });
   }
-  const status: Health['status'] = healthRows.some((h) => h.shortfallMin > 0) ? 'atRisk' : healthRows.some((h) => h.bufferShrunk) ? 'tight' : 'ok';
+  for (const d of activeDeadlines) {
+    if (!needsMaterial.has(d.id)) continue;
+    healthRows.push({
+      deadlineId: d.id,
+      title: d.title,
+      dueAt: d.dueAt,
+      totalMin: 0,
+      doneMin: 0,
+      plannedMin: 0,
+      shortfallMin: 0,
+      bufferShrunk: false,
+      needsMaterial: true,
+      fixes: [`Add what's on ${d.title} (chapters, pages, slides…) so it can be planned`],
+    });
+  }
+  healthRows.sort((a, b) => a.dueAt.localeCompare(b.dueAt) || a.deadlineId.localeCompare(b.deadlineId));
+  const unsizedSoon = healthRows.some((h) => h.needsMaterial && deadlineById.get(h.deadlineId)?.kind !== 'assignment' && diffDays(today, h.dueAt) <= 21);
+  const status: Health['status'] = healthRows.some((h) => h.shortfallMin > 0) || unsizedSoon ? 'atRisk' : healthRows.some((h) => h.bufferShrunk) ? 'tight' : 'ok';
 
   const sessions = [...kept.map((s) => (s.pinned && !s.reasons.some((r) => r.code === 'pinned') ? { ...s, reasons: [{ code: 'pinned' as const }, ...s.reasons] } : s)), ...created].sort(
     (a, b) => a.date.localeCompare(b.date) || (a.kind === b.kind ? 0 : a.kind === 'new' ? -1 : 1) || a.id.localeCompare(b.id),

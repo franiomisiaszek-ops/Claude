@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { Source, SourceItem } from '../shared/types';
 import { parseFeed } from './connectors/ics';
-import { defaultDB } from './store';
-import { merge } from './sync';
+import { merge } from './merge';
+import { emptyState } from './__tests__/fixtures';
 
 const src = (type: Source['type'] = 'ics'): Source => ({ id: 'src1', type, name: 'Feed', config: {}, status: 'ok', intervalMin: 60, errorCount: 0 });
 const exam = (over: Partial<SourceItem> = {}): SourceItem => ({ externalId: 'e1', kind: 'exam', confidence: 0.9, title: 'Bio midterm', courseName: 'Biology', dueAt: '2026-11-20', ...over });
 
 describe('merge', () => {
   it('auto-accepts confident items and sends uncertain ones to the inbox', () => {
-    const db = defaultDB();
+    const db = emptyState();
     merge(db, src(), { items: [exam(), exam({ externalId: 'x', title: 'Week 5', kind: 'assignment', confidence: 0.5 })], complete: true });
     expect(db.deadlines.map((d) => d.title)).toEqual(['Bio midterm']);
     expect(db.inbox.map((e) => [e.change, e.title])).toEqual([['new', 'Week 5']]);
@@ -17,13 +17,13 @@ describe('merge', () => {
   });
 
   it('is a no-op when nothing changed', () => {
-    const db = defaultDB();
+    const db = emptyState();
     merge(db, src(), { items: [exam()], complete: true });
     expect(merge(db, src(), { items: [exam()], complete: true })).toBe(false);
   });
 
   it('applies source changes to fields the user did not edit, and flags due-date moves', () => {
-    const db = defaultDB();
+    const db = emptyState();
     merge(db, src(), { items: [exam()], complete: true });
     merge(db, src(), { items: [exam({ dueAt: '2026-11-22', title: 'Biology midterm' })], complete: true });
     expect(db.deadlines[0].dueAt).toBe('2026-11-22');
@@ -32,7 +32,7 @@ describe('merge', () => {
   });
 
   it('turns a change to a user-edited field into a conflict instead of overwriting', () => {
-    const db = defaultDB();
+    const db = emptyState();
     merge(db, src(), { items: [exam()], complete: true });
     db.deadlines[0].dueAt = '2026-11-19';
     db.deadlines[0].userEdited = ['dueAt'];
@@ -43,7 +43,7 @@ describe('merge', () => {
   });
 
   it('proposes removal only after an item is missing twice from a windowed feed', () => {
-    const db = defaultDB();
+    const db = emptyState();
     const range = { start: '2026-11-01', end: '2026-12-31' };
     merge(db, src(), { items: [exam()], complete: true, range });
     merge(db, src(), { items: [], complete: true, range });
@@ -51,14 +51,14 @@ describe('merge', () => {
     merge(db, src(), { items: [], complete: true, range });
     expect(db.inbox.filter((e) => e.change === 'removed')).toHaveLength(1);
     // Items outside the feed's window are never treated as removed.
-    const db2 = defaultDB();
+    const db2 = emptyState();
     merge(db2, src(), { items: [exam({ dueAt: '2027-03-01' })], complete: true });
     for (let i = 0; i < 3; i++) merge(db2, src(), { items: [], complete: true, range });
     expect(db2.inbox).toHaveLength(0);
   });
 
   it('skips exact duplicates of existing deadlines and links materials to their deadline', () => {
-    const db = defaultDB();
+    const db = emptyState();
     merge(db, src(), { items: [exam()], complete: true });
     merge(db, { ...src('google-calendar'), id: 'src2' }, { items: [exam({ externalId: 'cal1', title: 'Bio Midterm' })], complete: true });
     expect(db.deadlines).toHaveLength(1);
@@ -67,7 +67,7 @@ describe('merge', () => {
   });
 
   it('marks items done when the source reports them submitted', () => {
-    const db = defaultDB();
+    const db = emptyState();
     merge(db, src('google-classroom'), { items: [exam({ kind: 'assignment' })], complete: true });
     merge(db, src('google-classroom'), { items: [exam({ kind: 'assignment', done: true })], complete: true });
     expect(db.deadlines[0].status).toBe('done');
