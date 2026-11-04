@@ -111,6 +111,17 @@ describe('planner', () => {
     for (const s of sessions) expect(s.minutes).toBeLessThanOrEqual(60);
   });
 
+  it('never creates a session longer than maxSession, even when a day gets several chunks', () => {
+    const input = base({
+      availability: { minutesByWeekday: [240, 240, 240, 240, 240, 240, 240] },
+      deadlines: [deadline('bio', 'bio', 4)],
+      materials: [material('big', 'bio', 'bio', 100)], // 400 min over 2 days
+    });
+    const { sessions } = plan(input);
+    expect(newMinutes(sessions)).toBe(400);
+    for (const s of sessions) expect(s.minutes).toBeLessThanOrEqual(60);
+  });
+
   it('keeps syllabus order within a deadline', () => {
     const { sessions } = plan(single());
     const first = (id: string) => sessions.filter((s) => s.kind === 'new' && s.materialId === id).map((s) => s.date).sort()[0];

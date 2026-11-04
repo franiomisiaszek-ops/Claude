@@ -170,7 +170,10 @@ export interface Source {
     url?: string;
     anchor?: ISODate;
     calendarIds?: string[];
-    busyFromOtherEvents?: boolean;
+    /** ICS only: an LMS deadline feed, or a personal calendar (non-study events count as busy time). */
+    feedType?: 'lms' | 'calendar';
+    /** Classroom only: per-course calendars Google creates, skipped by the Calendar connector. */
+    courseCalendarIds?: string[];
   };
   status: 'never' | 'ok' | 'error' | 'syncing';
   intervalMin: number;

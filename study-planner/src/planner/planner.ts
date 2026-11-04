@@ -377,7 +377,7 @@ export function plan(input: PlanInput): PlanResult {
         if (!u) break;
         const take = Math.min(M, u.remaining);
         const reasons = reasonsFor(c.date, u.materialId);
-        const prev = created.find((s) => s.materialId === u.materialId && s.date === c.date && s.kind === 'new');
+        const prev = created.find((s) => s.materialId === u.materialId && s.date === c.date && s.kind === 'new' && s.minutes + take <= settings.maxSession);
         if (prev) prev.minutes += take;
         else {
           created.push({
