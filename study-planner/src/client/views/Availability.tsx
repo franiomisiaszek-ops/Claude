@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { fmtDate, fmtMin, WEEKDAYS } from '../../shared/dates';
-import type { PublicState } from '../../shared/types';
-import { act, api } from '../api';
+import { act, api, type AppState } from '../api';
 import { Card, Empty } from '../components';
 
 const ORDER = [1, 2, 3, 4, 5, 6, 0]; // Monday first
@@ -32,7 +31,7 @@ export function WeeklyEditor({ value, onChange }: { value: number[]; onChange: (
   );
 }
 
-export function Availability({ st }: { st: PublicState }) {
+export function Availability({ st }: { st: AppState }) {
   const [weekly, setWeekly] = useState(st.availability.minutesByWeekday);
   const [useWindow, setUseWindow] = useState(!!st.availability.studyWindow);
   const [win, setWin] = useState(st.availability.studyWindow ?? { start: '16:00', end: '20:00' });

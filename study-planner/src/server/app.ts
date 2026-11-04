@@ -110,7 +110,7 @@ export function createApp({ db, auth }: AppDeps) {
   });
 
   app.get('/api/config', (_req, res) => {
-    res.json({ appName: APP_NAME, googleSignIn: features.google(), emailVerification: features.email(), passwordReset: features.email() });
+    res.json({ appName: APP_NAME, googleSignIn: features.google(), emailVerification: features.email(), passwordReset: features.email(), supportEmail: env.supportEmail ?? null });
   });
 
   app.post('/api/cron/tick', async (req, res) => {

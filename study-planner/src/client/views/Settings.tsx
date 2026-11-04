@@ -1,7 +1,10 @@
-import { useState } from 'react';
-import type { PublicState } from '../../shared/types';
-import { act, api, toast } from '../api';
-import { Card, ConfirmButton } from '../components';
+import { useEffect, useState } from 'react';
+import { GRADE_SCALES } from '../../shared/grades';
+import type { GradeValue } from '../../shared/types';
+import { act, api, setSignedOut, toast, type AppState } from '../api';
+import { GradeInput, Card } from '../components';
+import { clearDeviceData, disablePush, enablePush, isStandalone, pushStatus, type PushStatus } from '../push';
+import { signOut } from '../App';
 
 const zones = (() => {
   try {
@@ -11,14 +14,13 @@ const zones = (() => {
   }
 })();
 
-export function Settings({ st }: { st: PublicState }) {
+export function Settings({ st }: { st: AppState }) {
   const s = st.settings;
   const [tz, setTz] = useState(s.timezone);
   const [digestTime, setDigestTime] = useState(s.digestTime);
-  const [perm, setPerm] = useState(typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
+  const [scale, setScale] = useState(s.gradeScale);
+  const [target, setTarget] = useState<GradeValue | undefined>(s.targetGrade);
   const [tune, setTune] = useState({ slack: Math.round(s.slack * 100), minChunk: s.minChunk, maxSession: s.maxSession, maxSubjects: s.maxSubjects });
-  const [email, setEmail] = useState({ host: s.email?.host ?? '', port: s.email?.port ?? 587, secure: s.email?.secure ?? false, user: s.email?.user ?? '', pass: '', from: s.email?.from ?? '', to: s.email?.to ?? '' });
-  const lastEmail = st.digestLog.filter((l) => l.channel === 'email').at(-1);
 
   return (
     <div className="stack">
@@ -50,79 +52,44 @@ export function Settings({ st }: { st: PublicState }) {
             <button className="primary">Save</button>
           </div>
         </form>
-        <div className="reminder-channels">
-          <div>
-            <strong>Browser notification</strong>
-            <p className="small muted">Shows today's plan (or “day off”) at the reminder time while this app is open in a tab.</p>
-            {perm === 'granted' ? (
-              <button
-                onClick={async () => {
-                  const d = await api<{ subject: string; text: string }>('GET', '/api/digest');
-                  new Notification(`📚 ${d.subject}`, { body: d.text, icon: '/favicon.svg' });
-                }}
-              >
-                Send a test notification
-              </button>
-            ) : perm === 'unsupported' ? (
-              <p className="small">Not supported in this browser.</p>
-            ) : (
-              <button onClick={async () => setPerm(await Notification.requestPermission())}>{perm === 'denied' ? 'Blocked in browser settings' : 'Enable notifications'}</button>
-            )}
-          </div>
-          <div>
-            <strong>Calendar app</strong>
-            <p className="small muted">Import the plan into Google/Apple/Outlook calendar to get its alerts on your phone. Re-download after big changes.</p>
-            <a className="button" href="/api/export.ics" download>
-              Download .ics
-            </a>
-          </div>
-        </div>
+        <PushSettings st={st} />
+        {st.features.email && (
+          <label className="check-row">
+            <input type="checkbox" checked={s.reminders.email} onChange={(e) => act(api('PUT', '/api/settings', { reminders: { ...s.reminders, email: e.target.checked } }))} />
+            Also email me the daily plan ({st.user.email}){!st.user.emailVerified && ' · confirm your email address first'}
+          </label>
+        )}
+        <p className="small muted">
+          Prefer your own calendar app? <a href="/api/export.ics">Download the plan as .ics</a> and import it (re-download after big changes).
+        </p>
       </Card>
 
-      <Card title="Email digest (optional)">
-        <p className="small muted">
-          Sent every morning at the reminder time after syncing your apps, through your own SMTP account (e.g. Gmail with an app password: smtp.gmail.com,
-          port 465, secure). The app must be running.
-          {lastEmail && ` Last sent ${new Date(lastEmail.sentAt).toLocaleString()}.`}
-        </p>
+      <Card title="Grades">
+        <p className="small muted">Used when you tell the app how an exam went. Each course can have its own target in Progress.</p>
         <form
           className="form-grid"
           onSubmit={(e) => {
             e.preventDefault();
-            void act(api('PUT', '/api/settings', { email }), 'Email settings saved');
+            void act(api('PUT', '/api/settings', { gradeScale: scale, ...(target ? { targetGrade: target } : {}) }), 'Saved');
           }}
         >
           <label className="grow">
-            SMTP host <input value={email.host} onChange={(e) => setEmail({ ...email, host: e.target.value })} placeholder="smtp.example.com" />
+            My grading scale
+            <select value={scale} onChange={(e) => (setScale(e.target.value), setTarget(undefined))}>
+              {GRADE_SCALES.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.label}
+                  {g.hint ? ` (${g.hint})` : ''}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
-            Port <input type="number" value={email.port} onChange={(e) => setEmail({ ...email, port: Number(e.target.value) })} />
-          </label>
-          <label className="check-row">
-            <input type="checkbox" checked={email.secure} onChange={(e) => setEmail({ ...email, secure: e.target.checked })} /> TLS (port 465)
-          </label>
-          <label className="grow">
-            Username <input value={email.user} onChange={(e) => setEmail({ ...email, user: e.target.value })} autoComplete="off" />
-          </label>
-          <label className="grow">
-            Password
-            <input type="password" value={email.pass} onChange={(e) => setEmail({ ...email, pass: e.target.value })} placeholder={s.email?.hasPass ? '(unchanged)' : ''} autoComplete="new-password" />
-          </label>
-          <label className="grow">
-            Send to <input type="email" value={email.to} onChange={(e) => setEmail({ ...email, to: e.target.value })} />
+            Usual target
+            <GradeInput scaleId={scale} value={target} onChange={setTarget} />
           </label>
           <div className="form-actions">
             <button className="primary">Save</button>
-            {s.email && (
-              <>
-                <button type="button" onClick={() => act(api('POST', '/api/digest/email'), 'Test email sent')}>
-                  Send test
-                </button>
-                <button type="button" className="ghost danger" onClick={() => act(api('PUT', '/api/settings', { email: null }), 'Email turned off')}>
-                  Turn off
-                </button>
-              </>
-            )}
           </div>
         </form>
       </Card>
@@ -153,19 +120,111 @@ export function Settings({ st }: { st: PublicState }) {
         </form>
       </Card>
 
-      <Card title="Data">
-        <p className="small muted">Everything is stored locally in the app's data folder on this computer. Nothing is sent anywhere except to the apps you connect.</p>
-        <ConfirmButton
-          className="danger"
-          confirmText="Really erase everything?"
-          onConfirm={async () => {
-            await act(api('POST', '/api/reset'));
-            toast('All data erased');
+      <Account st={st} />
+    </div>
+  );
+}
+
+function PushSettings({ st }: { st: AppState }) {
+  const [status, setStatus] = useState<PushStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    void pushStatus().then(setStatus);
+  }, []);
+  if (!st.features.push) return <p className="small muted">Push reminders aren't switched on for this site yet.</p>;
+  if (!status) return null;
+  return (
+    <div className="push-settings">
+      <strong>Notifications on this device</strong>
+      {status === 'needs-install' && (
+        <p className="small">
+          On iPhone and iPad, add the app to your Home Screen first: tap Share, then “Add to Home Screen”, then open it from there and turn notifications on.
+        </p>
+      )}
+      {status === 'unsupported' && <p className="small muted">This browser doesn't support push notifications.</p>}
+      {status === 'denied' && <p className="small">Notifications are blocked for this site. Allow them in your browser's site settings, then reload.</p>}
+      {(status === 'off' || status === 'on') && (
+        <div className="form-actions">
+          {status === 'off' ? (
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await enablePush(st.vapidPublicKey!);
+                  await act(api('PUT', '/api/settings', { reminders: { ...st.settings.reminders, push: true } }));
+                  setStatus('on');
+                  toast('Notifications are on for this device.');
+                } catch (e) {
+                  toast((e as Error).message, 'error');
+                }
+                setBusy(false);
+              }}
+            >
+              Turn on notifications
+            </button>
+          ) : (
+            <>
+              <span className="chip status-done">On for this device</span>
+              <button onClick={() => act(api('POST', '/api/push/test'), 'Test sent')}>Send a test</button>
+              <button
+                className="ghost"
+                onClick={async () => {
+                  await disablePush();
+                  setStatus('off');
+                }}
+              >
+                Turn off here
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {!isStandalone() && status !== 'needs-install' && <p className="small muted">Tip: install the app (browser menu → Install, or Add to Home Screen) for a full-screen experience.</p>}
+    </div>
+  );
+}
+
+function Account({ st }: { st: AppState }) {
+  const [confirm, setConfirm] = useState('');
+  return (
+    <Card title="Account">
+      <p>
+        Signed in as <strong>{st.user.name}</strong> ({st.user.email})
+      </p>
+      <div className="form-actions">
+        <a className="button" href="/api/account/export" download>
+          Download my data
+        </a>
+        <button onClick={() => void signOut()}>Sign out</button>
+      </div>
+      <details className="danger-zone">
+        <summary>Delete account</summary>
+        <p className="small">This permanently deletes your account and all your data, and disconnects Google. It can't be undone.</p>
+        <form
+          className="inline"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            const ok = await act(api('DELETE', '/api/account', { confirm }));
+            if (ok) {
+              await clearDeviceData();
+              setSignedOut();
+              history.replaceState(null, '', '/');
+            }
           }}
         >
-          Erase all data
-        </ConfirmButton>
-      </Card>
-    </div>
+          <label className="small">
+            Type DELETE to confirm <input value={confirm} onChange={(e) => setConfirm(e.target.value)} aria-label="Type DELETE to confirm" />
+          </label>
+          <button className="danger" disabled={confirm !== 'DELETE'}>
+            Delete my account
+          </button>
+        </form>
+      </details>
+      <p className="small muted">
+        <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms</a>
+      </p>
+    </Card>
   );
 }

@@ -46,6 +46,8 @@ export const env = {
     privateKey: process.env.VAPID_PRIVATE_KEY,
     subject: process.env.VAPID_SUBJECT,
   },
+  /** Shown on the privacy policy and terms pages. */
+  supportEmail: process.env.SUPPORT_EMAIL,
   /** Bearer token an external scheduler uses to call /api/cron/tick. */
   cronSecret: process.env.CRON_SECRET,
   /** Run background jobs inside the web process (on by default). */

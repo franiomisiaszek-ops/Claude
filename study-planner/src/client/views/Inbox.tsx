@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { fmtDate } from '../../shared/dates';
-import type { InboxEntry, PublicState } from '../../shared/types';
-import { act, api } from '../api';
+import type { InboxEntry } from '../../shared/types';
+import { act, api, type AppState } from '../api';
 import { Card, Empty } from '../components';
 
 const resolve = (id: string, body: Record<string, unknown>) => act(api('POST', `/api/inbox/${id}`, body));
 
-export function Inbox({ st }: { st: PublicState }) {
+export function Inbox({ st }: { st: AppState }) {
   const order: InboxEntry['change'][] = ['conflict', 'new', 'removed', 'changed'];
   const entries = [...st.inbox].sort((a, b) => order.indexOf(a.change) - order.indexOf(b.change) || a.createdAt.localeCompare(b.createdAt));
   return (
@@ -25,8 +25,8 @@ export function Inbox({ st }: { st: PublicState }) {
   );
 }
 
-function Entry({ st, e }: { st: PublicState; e: InboxEntry }) {
-  const source = st.sources.find((s) => s.id === e.sourceId)?.name ?? 'a connected app';
+function Entry({ st, e }: { st: AppState; e: InboxEntry }) {
+  const source = e.sourceId === 'syllabus' ? 'your syllabus' : (st.sources.find((s) => s.id === e.sourceId)?.name ?? 'a connected app');
   const item = e.payload.item;
   const [kind, setKind] = useState<string>(item?.kind ?? 'assignment');
   const [dueAt, setDueAt] = useState<string>(item?.dueAt ?? '');
@@ -40,7 +40,16 @@ function Entry({ st, e }: { st: PublicState; e: InboxEntry }) {
             from {source} · {item.courseName}
           </span>
         </div>
-        <p className="muted small">We weren't sure what this is. Tell us and it joins the plan.</p>
+        {e.sourceId === 'syllabus' ? (
+          <p className="muted small">
+            Found in your syllabus: <em>{e.payload.dateText}</em>
+            {e.payload.topics ? <> · covers <em>{e.payload.topics}</em></> : null}
+            {e.payload.materials?.length ? <> · will add {e.payload.materials.map((m: any) => m.title).join(', ')}</> : null}
+            {!e.payload.quoteFound && ' · please double-check this one'}
+          </p>
+        ) : (
+          <p className="muted small">We weren't sure what this is. Tell us and it joins the plan.</p>
+        )}
         <div className="form-grid">
           <label>
             It's a…

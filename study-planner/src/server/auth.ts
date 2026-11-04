@@ -11,7 +11,8 @@ export function createAuth(db: DB, hooks: { onUserCreated: (userId: string) => P
     appName: APP_NAME,
     baseURL: env.publicUrl,
     secret: env.authSecret,
-    trustedOrigins: [env.publicUrl],
+    // In development the Vite dev server (port 5173) proxies to the API.
+    trustedOrigins: env.isProd ? [env.publicUrl] : [env.publicUrl, 'http://localhost:5173'],
     database: drizzleAdapter(db, { provider: 'pg', schema: { user, session, account, verification, rateLimit } }),
     emailAndPassword: {
       enabled: true,

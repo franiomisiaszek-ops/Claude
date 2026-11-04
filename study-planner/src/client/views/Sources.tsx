@@ -1,24 +1,24 @@
 import { useEffect, useState } from 'react';
-import type { PublicState, Source } from '../../shared/types';
-import { act, api, toast } from '../api';
+import type { Source } from '../../shared/types';
+import { act, api, toast, type AppState } from '../api';
 import { Card, ConfirmButton, relTime } from '../components';
 
 const TYPE_LABEL: Record<Source['type'], string> = {
   demo: 'Demo data',
-  ics: 'Calendar feed (ICS)',
+  ics: 'Calendar feed',
   'google-classroom': 'Google Classroom',
   'google-calendar': 'Google Calendar',
 };
 
-export function Sources({ st }: { st: PublicState }) {
+export function Sources({ st }: { st: AppState }) {
   return (
     <div className="stack">
       <div className="page-head">
         <h1>Connected apps</h1>
       </div>
       <p className="muted">
-        Connected apps are checked in the background (Classroom every 30 min, Calendar every 15 min, feeds every 3 h) and whenever you press Sync. New exams and
-        material are added to the plan automatically.
+        Connected apps are checked in the background (Classroom every 30 min, Calendar every 15 min, feeds every 3 h) and when you press Sync. Clear new items go
+        straight into the plan; anything uncertain waits in your Inbox.
       </p>
       {st.sources.length > 0 && (
         <div className="stack-sm">
@@ -27,11 +27,11 @@ export function Sources({ st }: { st: PublicState }) {
           ))}
         </div>
       )}
-      <GoogleSetup st={st} />
+      <GoogleCard st={st} />
       <IcsForm />
       {!st.sources.some((s) => s.type === 'demo') && (
         <Card title="Just trying it out?">
-          <p className="muted">Load a sample school term with four courses, exams, a quiz, an essay and reading material. Remove it any time.</p>
+          <p className="muted">Load a sample term with four courses, exams, a quiz, an essay and reading material. Remove it any time.</p>
           <button onClick={() => act(api('POST', '/api/sources', { type: 'demo' }), 'Demo data added')}>Add demo data</button>
         </Card>
       )}
@@ -39,7 +39,7 @@ export function Sources({ st }: { st: PublicState }) {
   );
 }
 
-function SourceRow({ st, s }: { st: PublicState; s: Source }) {
+function SourceRow({ st, s }: { st: AppState; s: Source }) {
   const [busy, setBusy] = useState(false);
   const items = st.deadlines.filter((d) => d.origin?.sourceId === s.id).length + st.materials.filter((m) => m.origin?.sourceId === s.id).length;
   return (
@@ -49,7 +49,7 @@ function SourceRow({ st, s }: { st: PublicState; s: Source }) {
           <strong>{s.name}</strong> <span className="chip">{TYPE_LABEL[s.type]}</span>
         </div>
         <div className="small muted">
-          {s.status === 'syncing' ? 'Syncing…' : `Last checked ${relTime(s.lastSyncAt)}`} · {items} item{items === 1 ? '' : 's'}
+          Last checked {relTime(s.lastSyncAt)} · {items} item{items === 1 ? '' : 's'}
           {s.lastChangeAt ? ` · last change ${relTime(s.lastChangeAt)}` : ''}
         </div>
         {s.error && <div className="error-text small">⚠ {s.error}</div>}
@@ -71,11 +71,15 @@ function SourceRow({ st, s }: { st: PublicState; s: Source }) {
             {busy ? 'Syncing…' : 'Sync now'}
           </button>
         )}
-        <ConfirmButton className="ghost danger" confirmText="Remove app and its imported items?" onConfirm={() => act(api('DELETE', `/api/sources/${s.id}`), 'Removed')}>
+        <ConfirmButton
+          className="ghost danger"
+          confirmText="Remove app and its imported items?"
+          onConfirm={() => act(s.type.startsWith('google') ? api('POST', '/api/google/disconnect', {}) : api('DELETE', `/api/sources/${s.id}`), 'Removed')}
+        >
           Remove
         </ConfirmButton>
       </div>
-      {s.type === 'google-calendar' && !s.needsReconnect && st.googleConnected && <CalendarPicker s={s} />}
+      {s.type === 'google-calendar' && !s.needsReconnect && st.google.connected && <CalendarPicker s={s} />}
     </Card>
   );
 }
@@ -98,7 +102,7 @@ function CalendarPicker({ s }: { s: Source }) {
     );
   return (
     <div className="calendar-picker">
-      <p className="small muted">Events in these calendars count as busy time (inside your study window). Ones that look like exams are suggested as deadlines.</p>
+      <p className="small muted">Events in these calendars count as busy time inside your study window. Ones that look like exams are suggested as deadlines.</p>
       {!cals && <p className="small">Loading…</p>}
       {cals?.map((c) => {
         const id = c.primary ? 'primary' : c.id;
@@ -124,85 +128,28 @@ function CalendarPicker({ s }: { s: Source }) {
   );
 }
 
-function GoogleSetup({ st }: { st: PublicState }) {
-  const [clientId, setClientId] = useState(st.settings.googleClient?.clientId ?? '');
-  const [secret, setSecret] = useState('');
-  const [show, setShow] = useState(!st.settings.googleClient);
-  const hasClient = !!st.settings.googleClient;
-  const connected = st.googleConnected && st.sources.some((s) => s.type.startsWith('google'));
+function GoogleCard({ st }: { st: AppState }) {
+  const connected = st.google.connected && st.sources.some((s) => s.type.startsWith('google'));
   return (
     <Card title="Google Classroom & Google Calendar">
-      {connected ? (
+      {!st.google.available ? (
+        <p className="muted">Google connection isn't switched on for this site yet. Use your school's calendar feed below, or add exams yourself.</p>
+      ) : connected ? (
         <p>
-          ✅ Connected. Classroom assignments, tests and materials, plus your calendar's busy time, are imported read-only.{' '}
-          <a href="/oauth/google/start">Reconnect</a>
+          ✅ Connected{st.google.email ? ` as ${st.google.email}` : ''}. Classroom coursework, tests and materials and your calendar's busy times are read (never
+          changed). <a href="/oauth/google/start">Reconnect</a>
         </p>
       ) : (
         <>
-          <p className="muted">
-            Google requires your own (free) OAuth client so this app can read your classes privately. It takes about 5 minutes, once.
-          </p>
-          {hasClient && (
-            <p>
-              <a className="button primary" href="/oauth/google/start">
-                Connect Google
-              </a>{' '}
-              <button className="link" onClick={() => setShow(!show)}>
-                {show ? 'Hide setup' : 'Change client'}
-              </button>
-            </p>
-          )}
-        </>
-      )}
-      {show && !connected && (
-        <div className="google-setup">
-          <ol className="steps">
-            <li>
-              Open the <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noreferrer">Google Cloud console</a> and create a project.
-            </li>
-            <li>
-              Enable the <a href="https://console.cloud.google.com/apis/library/classroom.googleapis.com" target="_blank" rel="noreferrer">Classroom API</a> and the{' '}
-              <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com" target="_blank" rel="noreferrer">Calendar API</a>.
-            </li>
-            <li>
-              Under <em>Google Auth Platform → Branding/Audience</em>, set up an <strong>External</strong> app and add yourself as a user. Then click{' '}
-              <strong>Publish app</strong> (“In production”). In “Testing” mode Google signs you out every 7 days. You'll see an “unverified app” warning
-              when connecting; that's expected for a personal app.
-            </li>
-            <li>
-              Under <em>Clients</em>, create an OAuth client of type <strong>Web application</strong> with this authorized redirect URI:
-              <code className="copy" onClick={() => navigator.clipboard?.writeText(st.redirectUri).then(() => toast('Copied'))} title="Click to copy">
-                {st.redirectUri}
-              </code>
-            </li>
-            <li>Paste the client ID and secret here, save, then press Connect.</li>
-          </ol>
-          <form
-            className="form-grid"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (await act(api('PUT', '/api/google/client', { clientId, clientSecret: secret }), 'Saved. Now press “Connect Google”.')) {
-                setSecret('');
-                setShow(false);
-              }
-            }}
-          >
-            <label className="grow">
-              Client ID <input required value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="1234-abc.apps.googleusercontent.com" />
-            </label>
-            <label className="grow">
-              Client secret
-              <input type="password" required={!hasClient} value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={hasClient ? '(unchanged)' : 'GOCSPX-…'} autoComplete="off" />
-            </label>
-            <div className="form-actions">
-              <button className="primary">Save</button>
-            </div>
-          </form>
+          <p className="muted">Read-only access: we import your Classroom coursework and materials, and see busy times in the calendars you pick. We never post or change anything.</p>
+          <a className="button primary" href="/oauth/google/start">
+            Connect Google
+          </a>
           <p className="small muted">
-            School accounts: some schools block apps their admin hasn't approved. If Google says access is blocked, use your school's calendar feed below
-            instead. Classroom adds every due date to Google Calendar too, so the Calendar feed covers most of it.
+            School accounts: if you're under 18, your school's Google admin has to allow this app first. If Google blocks the connection, use the calendar feed
+            below; Classroom puts due dates in Google Calendar, so its feed covers most of it.
           </p>
-        </div>
+        </>
       )}
     </Card>
   );
@@ -216,13 +163,13 @@ function IcsForm() {
   return (
     <Card title="School calendar feed (Canvas, Moodle, Blackboard, Brightspace, Teams/Outlook…)">
       <details className="help">
-        <summary>Where do I find my feed URL?</summary>
+        <summary>Where do I find my feed link?</summary>
         <ul className="small">
           <li>
             <strong>Canvas:</strong> Calendar → “Calendar Feed” (bottom right) → copy the link.
           </li>
           <li>
-            <strong>Moodle:</strong> Calendar → “Export calendar” → choose “All courses” and “Recent and next 60 days” → “Get calendar URL”.
+            <strong>Moodle:</strong> Calendar → “Export calendar” → “All courses”, “Recent and next 60 days” → “Get calendar URL”.
           </li>
           <li>
             <strong>Blackboard:</strong> Calendar → settings ⚙ → “Share calendar” → copy the link.
@@ -231,11 +178,11 @@ function IcsForm() {
             <strong>Brightspace (D2L):</strong> Calendar → “Subscribe” → copy the link.
           </li>
           <li>
-            <strong>Outlook / Teams:</strong> Outlook settings → Calendar → Shared calendars → “Publish a calendar” → copy the ICS link. Choose “Personal
-            calendar” below.
+            <strong>Outlook / Teams:</strong> Outlook settings → Calendar → Shared calendars → “Publish a calendar” → copy the ICS link (choose “Personal
+            calendar” below).
           </li>
           <li>
-            <strong>Google Calendar (without OAuth):</strong> Calendar settings → “Secret address in iCal format”.
+            <strong>Google Calendar:</strong> Calendar settings → “Secret address in iCal format”.
           </li>
         </ul>
       </details>
@@ -253,7 +200,7 @@ function IcsForm() {
         }}
       >
         <label className="grow">
-          Feed URL <input required value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://… or webcal://…" inputMode="url" />
+          Feed link <input required value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://… or webcal://…" inputMode="url" />
         </label>
         <label>
           Name <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Canvas" />
@@ -261,7 +208,7 @@ function IcsForm() {
         <label>
           This feed is my…
           <select value={feedType} onChange={(e) => setFeedType(e.target.value as 'lms' | 'calendar')}>
-            <option value="lms">School deadlines (LMS)</option>
+            <option value="lms">School deadlines</option>
             <option value="calendar">Personal calendar (busy time + exams)</option>
           </select>
         </label>

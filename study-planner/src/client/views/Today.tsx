@@ -1,11 +1,14 @@
+import { useState } from 'react';
 import { addDays, diffDays, fmtDate, fmtMin } from '../../shared/dates';
 import { sessionTitle } from '../../shared/labels';
-import type { PublicState } from '../../shared/types';
-import { act, api } from '../api';
+import { act, api, type AppState } from '../api';
 import { goTo } from '../App';
-import { Card, ConfirmButton, DeadlineRunway, Empty, SessionCard } from '../components';
+import { Card, ConfirmButton, DeadlineRunway, SessionCard } from '../components';
+import { Debrief } from './Debrief';
+import { pendingDebriefs } from './Progress';
 
-export function Today({ st }: { st: PublicState }) {
+export function Today({ st }: { st: AppState }) {
+  const [debrief, setDebrief] = useState<string | null>(null);
   const today = st.today;
   const blocked = st.blocks.some((b) => b.start <= today && today <= b.end);
   // On a blocked day the skipped sessions are just noise: the day-off card explains it.
@@ -16,9 +19,12 @@ export function Today({ st }: { st: PublicState }) {
   const plannedMin = planned.reduce((a, s) => a + s.minutes, 0);
   const next = st.sessions.find((s) => s.date > today && s.status === 'planned');
   const recentMissed = st.sessions.filter((s) => s.status === 'missed' && s.date >= addDays(today, -3)).length;
-  const risky = st.planMeta.health.deadlines.filter((h) => h.shortfallMin > 0);
-  const upcoming = st.planMeta.health.deadlines.filter((h) => h.dueAt <= addDays(today, 30)).sort((a, b) => a.dueAt.localeCompare(b.dueAt));
+  const health = st.planMeta.health.deadlines;
+  const risky = health.filter((h) => h.shortfallMin > 0);
+  const unsized = health.filter((h) => h.needsMaterial && diffDays(today, h.dueAt) <= 21);
+  const upcoming = health.filter((h) => !h.needsMaterial && h.dueAt <= addDays(today, 30)).sort((a, b) => a.dueAt.localeCompare(b.dueAt));
   const hasAnything = st.deadlines.length + st.materials.length > 0;
+  const debriefs = pendingDebriefs(st);
 
   return (
     <div className="stack">
@@ -29,11 +35,41 @@ export function Today({ st }: { st: PublicState }) {
           {doneMin > 0 && <p className="muted">{fmtMin(doneMin)} done so far. Nice.</p>}
         </div>
         {planned.length > 0 && (
-          <ConfirmButton className="ghost" confirmText="Tap again to move today's study" onConfirm={() => act(api('POST', '/api/today/off'), "Today is now a day off. The plan moved everything to the coming days.")}>
+          <ConfirmButton className="ghost" confirmText="Tap again to move today's study" onConfirm={() => act(api('POST', '/api/today/off'), 'Today is now a day off. The plan moved everything to the coming days.')}>
             Can't study today
           </ConfirmButton>
         )}
       </div>
+
+      {debriefs.slice(0, 2).map((d) => (
+        <div key={d.id} className="prompt-card" role="region" aria-label={`Result for ${d.title}`}>
+          <span>
+            {st.results.some((r) => r.deadlineId === d.id) ? (
+              <>
+                Got your grade for <strong>{d.title}</strong>?
+              </>
+            ) : (
+              <>
+                How did <strong>{d.title}</strong> go?
+              </>
+            )}{' '}
+            <span className="muted small">It helps the next plan fit you.</span>
+          </span>
+          <button className="primary small" onClick={() => setDebrief(d.id)}>
+            {st.results.some((r) => r.deadlineId === d.id) ? 'Add grade' : 'Tell us'}
+          </button>
+        </div>
+      ))}
+
+      {unsized.length > 0 && (
+        <div className="alert warn" role="status">
+          <strong>Not planned yet:</strong> {unsized.map((h) => h.title).join(', ')}. Add what's on {unsized.length > 1 ? 'them' : 'it'} so study time can be worked out from the
+          material.{' '}
+          <button className="link" onClick={() => goTo('materials')}>
+            Add material
+          </button>
+        </div>
+      )}
 
       {risky.length > 0 && (
         <div className="alert" role="alert">
@@ -62,14 +98,13 @@ export function Today({ st }: { st: PublicState }) {
                 Next session: <strong>{fmtDate(next.date)}</strong>: {sessionTitle(st, next)} ({fmtMin(next.minutes)}).
               </p>
             ) : hasAnything ? (
-              <p className="muted">No sessions are planned. Check your availability if that seems wrong.</p>
+              <p className="muted">No sessions are planned. Check that your exams have material and that your availability has study time.</p>
             ) : (
               <p>
                 <button className="primary" onClick={() => goTo('sources')}>
                   Connect an app
                 </button>{' '}
-                or{' '}
-                <button onClick={() => goTo('materials')}>add an exam yourself</button>
+                or <button onClick={() => goTo('materials')}>add an exam yourself</button>
               </p>
             )}
           </div>
@@ -96,11 +131,12 @@ export function Today({ st }: { st: PublicState }) {
       )}
 
       <Week st={st} />
+      {debrief && <Debrief st={st} deadlineId={debrief} onClose={() => setDebrief(null)} />}
     </div>
   );
 }
 
-function Week({ st }: { st: PublicState }) {
+function Week({ st }: { st: AppState }) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(st.today, i + 1));
   return (
     <Card title="Next 7 days">

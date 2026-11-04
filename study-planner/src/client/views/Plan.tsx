@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import { addDays, dateRange, fmtDate, fmtMin, weekday } from '../../shared/dates';
 import { materialName } from '../../shared/labels';
-import type { ISODate, PublicState } from '../../shared/types';
-import { act, api } from '../api';
+import type { ISODate } from '../../shared/types';
+import { act, api, type AppState } from '../api';
 import { Card, DeadlineRunway, Empty, SessionCard } from '../components';
 
 type Mode = 'agenda' | 'week' | 'month';
@@ -15,7 +15,7 @@ const savedMode = (): Mode => {
   }
 };
 
-export function Plan({ st }: { st: PublicState }) {
+export function Plan({ st }: { st: AppState }) {
   const [mode, setModeState] = useState<Mode>(savedMode);
   const [anchor, setAnchor] = useState(st.today);
   const setMode = (m: Mode) => {
@@ -77,7 +77,7 @@ export function Plan({ st }: { st: PublicState }) {
   );
 }
 
-function useDayInfo(st: PublicState) {
+function useDayInfo(st: AppState) {
   return useMemo(() => {
     const blocked = (d: ISODate) => st.blocks.some((b) => b.start <= d && d <= b.end);
     const capacity = (d: ISODate) => (blocked(d) ? 0 : Math.floor((st.availability.minutesByWeekday[weekday(d)] ?? 0) * st.settings.slack));
@@ -85,7 +85,7 @@ function useDayInfo(st: PublicState) {
   }, [st.blocks, st.availability, st.settings.slack]);
 }
 
-function AddSession({ st, date }: { st: PublicState; date: ISODate }) {
+function AddSession({ st, date }: { st: AppState; date: ISODate }) {
   const [open, setOpen] = useState(false);
   const [materialId, setMaterialId] = useState('');
   const [minutes, setMinutes] = useState('30');
@@ -124,7 +124,7 @@ function AddSession({ st, date }: { st: PublicState; date: ISODate }) {
   );
 }
 
-function Agenda({ st }: { st: PublicState }) {
+function Agenda({ st }: { st: AppState }) {
   const { blocked, capacity } = useDayInfo(st);
   const lastDue = st.deadlines.reduce((a, d) => (d.dueAt > a ? d.dueAt : a), addDays(st.today, 13));
   const days = dateRange(st.today, lastDue > addDays(st.today, 90) ? addDays(st.today, 90) : lastDue);
@@ -169,7 +169,7 @@ function Agenda({ st }: { st: PublicState }) {
   );
 }
 
-function Week({ st, anchor, setAnchor }: { st: PublicState; anchor: ISODate; setAnchor: (d: ISODate) => void }) {
+function Week({ st, anchor, setAnchor }: { st: AppState; anchor: ISODate; setAnchor: (d: ISODate) => void }) {
   const { blocked, capacity } = useDayInfo(st);
   const start = addDays(anchor, -((weekday(anchor) + 6) % 7)); // Monday
   const days = dateRange(start, addDays(start, 6));
@@ -243,7 +243,7 @@ function Week({ st, anchor, setAnchor }: { st: PublicState; anchor: ISODate; set
   );
 }
 
-function Month({ st, anchor, setAnchor, openWeek }: { st: PublicState; anchor: ISODate; setAnchor: (d: ISODate) => void; openWeek: (d: ISODate) => void }) {
+function Month({ st, anchor, setAnchor, openWeek }: { st: AppState; anchor: ISODate; setAnchor: (d: ISODate) => void; openWeek: (d: ISODate) => void }) {
   const { blocked, capacity } = useDayInfo(st);
   const first = `${anchor.slice(0, 7)}-01`;
   const gridStart = addDays(first, -((weekday(first) + 6) % 7));
