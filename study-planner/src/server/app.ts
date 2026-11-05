@@ -97,7 +97,7 @@ export function createApp({ db, auth }: AppDeps) {
   // Defense in depth against CSRF: state-changing API calls must come from our own origin.
   const devOrigin = (o: string) => !env.isProd && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(o);
   app.use('/api', (req, res, next) => {
-    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || req.path.startsWith('/cron/')) return next();
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || req.path.startsWith('/cron/') || env.devTrustAnyOrigin) return next();
     const origin = req.get('origin');
     if (origin && origin !== env.publicUrl && !devOrigin(origin)) return res.status(403).json({ error: 'Request blocked (wrong origin).' });
     next();

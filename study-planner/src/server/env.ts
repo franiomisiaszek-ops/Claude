@@ -58,6 +58,11 @@ export const env = {
   cronSecret: process.env.CRON_SECRET,
   /** Run background jobs inside the web process (on by default). */
   inProcessJobs: process.env.IN_PROCESS_JOBS !== 'false',
+  /**
+   * Local previews only: accept sign-in from whatever address the page is opened at (e.g. a preview proxy).
+   * Ignored whenever a real database or production mode is configured.
+   */
+  devTrustAnyOrigin: !strict && process.env.DEV_TRUST_ANY_ORIGIN === '1',
   /** Number of proxies in front of the app (Render: 1). */
   trustProxy: Number(process.env.TRUST_PROXY ?? 1),
   /** Verified emails that can see the owner status card. */
