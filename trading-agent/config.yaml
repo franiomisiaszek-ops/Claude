@@ -1,0 +1,90 @@
+# papertrader configuration. Safe to commit: NO secrets in this file (those go in .env).
+# Every value is checked at startup; a typo or an out-of-range number stops the
+# program with a readable error. Run `papertrader check` after editing.
+
+universe:
+  index: sp500            # sp500 | sp100 | nasdaq100 | custom
+  custom_tickers: []      # only used when index is "custom"
+  benchmark: SPY
+
+# Times are New York time, trading days only (weekends, holidays and half days
+# come from the Alpaca market calendar).
+schedule:
+  timezone: America/New_York
+  ingest: "06:30"             # overnight news, filings, macro
+  research_agents: "07:30"
+  score_and_judge: "08:20"    # pattern model + judge
+  morning_brief: "08:45"      # Telegram
+  place_orders: "09:35"       # never earlier than 09:35
+  monitor_interval_minutes: 10
+  reconcile_eod: "16:15"
+  resolve_outcomes: "17:00"
+  weekly_day: sat             # retrain + weekly report
+  weekly_time: "09:00"
+  heartbeat_grace_minutes: 15 # alert if a job is this late
+
+# Claude API spend, enforced in code by the cost governor.
+budget:
+  monthly_usd: 100
+  warn_at: 0.70        # Telegram warning at 70% of the monthly budget
+  degrade_at: 0.85     # fewer agents + lower effort from 85%
+  hard_stop_at: 1.0    # no more API calls this month at 100%
+  daily_overspend_factor: 1.5
+  batch_discount: 0.5  # Message Batches API is billed at 50%
+  # USD per million tokens (Anthropic list prices, checked 2026-11-03).
+  # cache_write is the 5-minute cache price (1.25x input). Update if prices change.
+  prices:
+    claude-opus-5-5:   { input: 4.00, output: 20.00, cache_read: 0.20, cache_write: 5.00 }
+    claude-sonnet-5-5: { input: 2.00, output: 10.00, cache_read: 0.10, cache_write: 2.50 }
+    claude-haiku-5-5:  { input: 0.10, output: 0.50,  cache_read: 0.01, cache_write: 0.125 }
+
+# Research agents. `defaults` applies to every agent; `overrides` changes one agent.
+# Agent names: macro, earnings, sec_filings, sector_analyst (runs once per GICS
+# sector), news_event, technicals, insider_institutional, contrarian.
+agents:
+  defaults:
+    model: claude-sonnet-5-5
+    effort: medium       # low | medium | high | xhigh | max
+    max_tokens: 16000
+    enabled: true
+  concurrency: 5
+  max_reports_per_agent: 5
+  overrides: {}
+  # Example:
+  # overrides:
+  #   sector_analyst: { model: claude-haiku-5-5, effort: low }
+  #   contrarian:     { effort: high }
+
+judge:
+  model: claude-opus-5-5
+  effort: high
+  max_tokens: 32000
+  confidence_threshold: 0.65   # only trades at or above this are executed
+  max_trades_per_day: 5
+  # final_confidence = judge x 0.5 + calibrated model probability x 0.3 + agent agreement x 0.2
+  blend: { judge: 0.5, model: 0.3, agreement: 0.2 }
+
+# Risk limits. No leverage and no options, ever - there is no setting for them.
+risk:
+  max_position_pct: 0.10            # at most 10% of equity in one position
+  max_open_positions: 10
+  max_sector_pct: 0.30              # at most 30% of equity in one sector
+  allow_shorts: false
+  daily_loss_kill_switch_pct: 0.03  # pause trading and alert at -3% on the day
+
+trading:
+  order_type: limit          # market | limit (bracket orders either way)
+  limit_slippage_pct: 0.003
+  time_in_force: day
+
+pattern_model:
+  horizons_days: [1, 3, 5, 10]
+  primary_horizon_days: 5
+  walk_forward_splits: 6
+  embargo_days: 10
+  calibration: isotonic      # isotonic | platt
+  transaction_cost_bps: 5
+  slippage_bps: 5
+
+backfill:
+  years: 5

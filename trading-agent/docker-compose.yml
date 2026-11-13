@@ -1,0 +1,81 @@
+# Start everything:   docker compose up -d --build
+# Watch the logs:     docker compose logs -f app
+# Stop:               docker compose down        (your data is kept)
+#
+# Three services:
+#   db         PostgreSQL. Not reachable from outside Docker.
+#   app        The scheduler / trading service (PAPER trading only).
+#   dashboard  Read-only web page at http://localhost:8501 (this computer only).
+
+name: papertrader
+
+x-app: &app
+  build: .
+  image: papertrader:local
+  restart: unless-stopped
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DATABASE_URL: postgresql+psycopg://papertrader:${POSTGRES_PASSWORD:-change-me}@db:5432/papertrader
+    PAPERTRADER_CONFIG: /app/config.yaml
+    DATA_DIR: /app/data
+  volumes:
+    - ./config.yaml:/app/config.yaml:ro   # edit config.yaml, then: docker compose restart
+    - appdata:/app/data
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: papertrader
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: papertrader
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U papertrader -d papertrader"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    <<: *app
+    command: ["papertrader", "run"]
+    healthcheck:
+      # Healthy while the heartbeat in the database is fresh.
+      test: ["CMD", "python", "-m", "papertrader.healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+      start_interval: 3s
+
+  dashboard:
+    <<: *app
+    command:
+      - streamlit
+      - run
+      - src/papertrader/dashboard/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+      - --browser.gatherUsageStats=false
+      - --client.toolbarMode=minimal
+    ports:
+      - "127.0.0.1:8501:8501"   # only this computer can open the dashboard
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+      start_interval: 3s
+
+volumes:
+  pgdata:
+  appdata:

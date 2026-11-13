@@ -1,0 +1,73 @@
+name: trading-agent
+
+on:
+  push:
+    paths:
+      - "trading-agent/**"
+      - ".github/workflows/trading-agent.yml"
+  pull_request:
+    paths:
+      - "trading-agent/**"
+      - ".github/workflows/trading-agent.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trading-agent-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: trading-agent
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      # Makes the database tests run on PostgreSQL as well as SQLite.
+      TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: trading-agent/uv.lock
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Lint
+        run: uv run ruff check .
+      - name: Formatting
+        run: uv run ruff format --check .
+      - name: Type check
+        run: uv run mypy
+      - name: Tests
+        run: uv run pytest
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start all services
+        run: docker compose up -d --build --wait --wait-timeout 180
+      - name: Startup checks inside the app container
+        run: docker compose exec -T app papertrader check
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop
+        if: always()
+        run: docker compose down -v
