@@ -62,7 +62,7 @@ class _Strict(BaseModel):
 
 
 class UniverseConfig(_Strict):
-    index: Literal["sp500", "sp100", "nasdaq100", "custom"] = "sp500"
+    index: Literal["sp500", "sp100", "custom"] = "sp500"
     custom_tickers: tuple[str, ...] = ()
     benchmark: str = "SPY"
 
@@ -252,6 +252,40 @@ class BackfillConfig(_Strict):
     years: int = Field(default=5, ge=1, le=12)
 
 
+class FredSeries(_Strict):
+    id: str
+    # True for series whose past values get revised (CPI, payrolls...). For those the
+    # full revision history is stored so a past decision only sees what was known then.
+    revised: bool = False
+
+
+class Manager13F(_Strict):
+    cik: str
+    name: str
+
+    @field_validator("cik")
+    @classmethod
+    def _digits(cls, value: str) -> str:
+        if not value.isdigit() or len(value) > 10:
+            raise ValueError(f"13F manager cik must be up to 10 digits, got {value!r}")
+        return value.zfill(10)
+
+
+class IngestConfig(_Strict):
+    # sip = all US exchanges (works on the free Alpaca plan for data older than 15 minutes);
+    # iex = one exchange only (smaller volumes).
+    alpaca_feed: Literal["sip", "iex", "delayed_sip"] = "sip"
+    # Prices adjusted for splits and dividends, so returns across those dates are right.
+    bar_adjustment: Literal["raw", "split", "dividend", "all"] = "all"
+    finnhub_news: bool = True
+    news_dedupe_window_hours: int = Field(default=72, ge=1)
+    sec_requests_per_second: float = Field(default=8.0, gt=0, le=10)  # SEC allows at most 10
+    form4_detail_years: int = Field(default=2, ge=0, le=12)
+    sector_etfs: tuple[str, ...] = ()
+    fred_series: tuple[FredSeries, ...] = ()
+    managers_13f: tuple[Manager13F, ...] = ()
+
+
 class AppConfig(_Strict):
     universe: UniverseConfig = UniverseConfig()
     schedule: ScheduleConfig = ScheduleConfig()
@@ -262,6 +296,7 @@ class AppConfig(_Strict):
     trading: TradingConfig = TradingConfig()
     pattern_model: PatternModelConfig = PatternModelConfig()
     backfill: BackfillConfig = BackfillConfig()
+    ingest: IngestConfig = IngestConfig()
 
     def models_in_use(self) -> set[str]:
         models = {self.judge.model}

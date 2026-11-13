@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -26,6 +27,38 @@ def _redact(key: str, value: Any) -> Any:
     if any(hint in lowered for hint in _SECRET_KEY_HINTS):
         return "***"
     return value
+
+
+_SECRET_IN_URL = re.compile(r"(?i)([?&](?:api_?key|token|secret|key)=)[^&\s\"']+")
+
+
+def redact_url_secrets(text: str) -> str:
+    """Mask API keys that some services (FRED) require in the URL itself."""
+    return _SECRET_IN_URL.sub(r"\1***", text)
+
+
+class _UrlSecretFilter(logging.Filter):
+    """Third-party HTTP libraries log full URLs; strip keys from them before anything is written."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = redact_url_secrets(str(record.msg))
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                redact_url_secrets(str(arg)) if not isinstance(arg, int | float) else arg
+                for arg in record.args
+            )
+        return True
+
+
+_URL_LOGGERS = ("httpx", "httpcore", "urllib3")
+
+
+def install_url_redaction() -> None:
+    """Idempotent. Called on import of the HTTP layer, so it works whatever the log setup is."""
+    for name in _URL_LOGGERS:
+        logger = logging.getLogger(name)
+        if not any(isinstance(f, _UrlSecretFilter) for f in logger.filters):
+            logger.addFilter(_UrlSecretFilter())
 
 
 class JsonFormatter(logging.Formatter):
@@ -56,6 +89,7 @@ def configure_logging(level: str = "INFO", fmt: Literal["json", "console"] = "js
     else:
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
 
+    install_url_redaction()
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)

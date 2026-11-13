@@ -16,6 +16,8 @@ dependencies = [
     "typer>=0.15",
     "streamlit>=1.40",
     "tzdata>=2024.1",
+    "alpaca-py>=0.45.0",
+    "defusedxml>=0.7.1",
 ]
 
 [project.scripts]
@@ -28,6 +30,7 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "types-pyyaml>=6.0",
+    "types-defusedxml>=0.7.0.20260504",
 ]
 
 [build-system]

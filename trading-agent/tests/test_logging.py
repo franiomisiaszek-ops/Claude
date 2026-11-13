@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pytest
 
-from papertrader.logging_setup import configure_logging
+from papertrader.logging_setup import configure_logging, redact_url_secrets
 
 
 def _last_line(capsys: pytest.CaptureFixture[str]) -> dict[str, object]:
@@ -56,3 +56,12 @@ def test_level_filtering(capsys: pytest.CaptureFixture[str]) -> None:
     configure_logging("WARNING", "json")
     logging.getLogger("papertrader.test").info("quiet")
     assert capsys.readouterr().out == ""
+
+
+def test_api_keys_inside_urls_are_masked() -> None:
+    url = "GET https://api.example.com/x?series_id=DGS10&api_key=abc123&file_type=json"
+    assert redact_url_secrets(url) == (
+        "GET https://api.example.com/x?series_id=DGS10&api_key=***&file_type=json"
+    )
+    assert redact_url_secrets("https://x.test/?token=t0k&a=1") == "https://x.test/?token=***&a=1"
+    assert redact_url_secrets("https://x.test/?symbol=AAPL") == "https://x.test/?symbol=AAPL"

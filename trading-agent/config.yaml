@@ -3,7 +3,7 @@
 # program with a readable error. Run `papertrader check` after editing.
 
 universe:
-  index: sp500            # sp500 | sp100 | nasdaq100 | custom
+  index: sp500            # sp500 | sp100 | custom
   custom_tickers: []      # only used when index is "custom"
   benchmark: SPY
 
@@ -88,3 +88,46 @@ pattern_model:
 
 backfill:
   years: 5
+
+# Data ingestion.
+ingest:
+  alpaca_feed: sip           # sip (all exchanges) | iex (one exchange) | delayed_sip
+  bar_adjustment: all        # prices adjusted for splits and dividends
+  finnhub_news: true         # second news source, only used when FINNHUB_API_KEY is set
+  news_dedupe_window_hours: 72
+  sec_requests_per_second: 8 # the SEC allows at most 10
+  form4_detail_years: 2      # how far back to read each insider filing in detail
+  # Sector funds: prices only, used to compare a stock with its sector.
+  sector_etfs: [XLC, XLY, XLP, XLE, XLF, XLV, XLI, XLK, XLB, XLRE, XLU]
+  # FRED macro series. revised: true keeps the full revision history.
+  fred_series:
+    - { id: DFF }                      # Fed funds rate
+    - { id: DGS2 }                     # 2-year Treasury yield
+    - { id: DGS10 }                    # 10-year Treasury yield
+    - { id: T10Y2Y }                   # yield curve: 10y minus 2y
+    - { id: T10Y3M }                   # yield curve: 10y minus 3m
+    - { id: VIXCLS }                   # VIX
+    - { id: BAMLH0A0HYM2 }             # high-yield credit spread
+    - { id: CPIAUCSL, revised: true }  # CPI
+    - { id: CPILFESL, revised: true }  # core CPI
+    - { id: PCEPILFE, revised: true }  # core PCE
+    - { id: UNRATE, revised: true }    # unemployment rate
+    - { id: PAYEMS, revised: true }    # nonfarm payrolls
+    - { id: ICSA, revised: true }      # weekly jobless claims
+  # Institutions whose quarterly 13F holdings are tracked (SEC identifiers checked 2026-11-13).
+  managers_13f:
+    - { cik: "1067983", name: Berkshire Hathaway }
+    - { cik: "1350694", name: Bridgewater Associates }
+    - { cik: "1167483", name: Tiger Global Management }
+    - { cik: "1336528", name: Pershing Square Capital }
+    - { cik: "1040273", name: Third Point }
+    - { cik: "1061768", name: Baupost Group }
+    - { cik: "1656456", name: Appaloosa }
+    - { cik: "1029160", name: Soros Fund Management }
+    - { cik: "1418814", name: ValueAct }
+    - { cik: "921669",  name: Icahn (Carl C.) }
+    - { cik: "1135730", name: Coatue Management }
+    - { cik: "1103804", name: Viking Global Investors }
+    - { cik: "1061165", name: Lone Pine Capital }
+    - { cik: "1536411", name: Duquesne Family Office }
+    - { cik: "1791786", name: Elliott Investment Management }

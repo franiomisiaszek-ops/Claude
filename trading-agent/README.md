@@ -22,7 +22,7 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 | Phase | What | Status |
 |---|---|---|
 | 1 | Scaffold: config, database, logging, CI, Docker | **done** |
-| 2 | Data ingestion + historical backfill | not started |
+| 2 | Data ingestion + historical backfill | **done** (needs your test run, see below) |
 | 3 | Research agents + judge + `dry-run` | not started |
 | 4 | Pattern model + backtest report | not started |
 | 5 | Trading engine + risk rules | not started |
@@ -31,8 +31,9 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 | 8 | Dashboard + deployment guide | not started |
 | 9 | Run on paper for 4-8 weeks | not started |
 
-Right now the program starts, checks its configuration, creates its database and
-shows a status page. It does not fetch data, call Claude or place orders yet.
+Right now the program can load and refresh all its data (prices, news, SEC filings,
+insider trades, fund holdings, earnings, macro). It does not call Claude or place
+orders yet.
 
 ## Decisions in effect
 
@@ -46,15 +47,16 @@ shows a status page. It does not fetch data, call Claude or place orders yet.
 
 All of these live in [`config.yaml`](config.yaml), with comments.
 
-## Start it (Docker)
+## Start it (Docker, Windows 10)
 
 You need [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running.
-Open a terminal in this folder (`trading-agent`).
+Open **PowerShell** in this folder (`trading-agent`): in File Explorer, open the folder,
+click the address bar, type `powershell` and press Enter.
 
 1. Create your private settings file (you can leave the keys empty for now):
 
    ```bash
-   cp .env.example .env
+   copy .env.example .env
    ```
 
 2. Open `.env` in a text editor and change `POSTGRES_PASSWORD` to something of your own
@@ -91,6 +93,75 @@ docker compose down
 database, so don't, unless you want to start from zero.)
 
 After editing `config.yaml`, apply it with `docker compose restart`.
+
+## Load data (Phase 2)
+
+Put your keys in `.env` first (see "Your keys" below), then rebuild once so the
+containers have the new code:
+
+```bash
+docker compose up -d --build
+```
+
+**Test run with 20 stocks.** This is the Phase 2 acceptance test. It picks 20 stocks
+spread across sectors and loads 5 years of history. Expect roughly 20 to 40 minutes;
+most of that is news and insider filings.
+
+```bash
+docker compose run --rm app papertrader ingest backfill --limit 20
+```
+
+It prints one line per step: `ok`, `skipped` (a key is missing, with the reason) or
+`failed` (with the error). **Run the same command a second time**: it should finish
+in about a minute and report almost nothing new. That is what "idempotent" means, and
+it is also how you resume if the first run is interrupted (closing the window, losing
+the connection): nothing is lost, it carries on from where it stopped.
+
+See what is stored:
+
+```bash
+docker compose run --rm app papertrader ingest status
+```
+
+Other commands:
+
+```bash
+docker compose run --rm app papertrader ingest steps
+```
+
+```bash
+docker compose run --rm app papertrader ingest backfill --tickers AAPL,MSFT,JPM --years 2
+```
+
+```bash
+docker compose run --rm app papertrader ingest backfill --only filings,insiders
+```
+
+```bash
+docker compose run --rm app papertrader ingest daily
+```
+
+**Full S&P 500 backfill** (the same command without `--limit`) takes several hours,
+mostly because the SEC and Alpaca limit how fast data may be requested. It is safe to
+stop and restart. Do the 20-stock test first; the full load is only needed before
+Phase 9.
+
+What each step loads:
+
+| Step | Source | Key needed |
+|---|---|---|
+| `universe` | S&P 500 members, sectors (Wikipedia), SEC identifiers | none |
+| `cusip_map` | Security codes, needed to read fund holdings (SEC) | `SEC_USER_AGENT` |
+| `bars` | Daily prices, adjusted for splits and dividends (Alpaca) | Alpaca |
+| `news` | News, mapped to tickers (Alpaca) | Alpaca |
+| `finnhub_news` | Second news source, last few days only | Finnhub (optional) |
+| `filings` | 8-K, 10-Q, 10-K, Form 4 lists; earnings release times (SEC) | `SEC_USER_AGENT` |
+| `insiders` | Insider trades from each Form 4, last 2 years (SEC) | `SEC_USER_AGENT` |
+| `holdings_13f` | Quarterly holdings of 15 large funds (SEC) | `SEC_USER_AGENT` |
+| `earnings` | EPS and revenue, actual vs estimate (Finnhub) | Finnhub (optional) |
+| `macro` | Rates, CPI, unemployment, yield curve (FRED) | FRED (optional) |
+| `market_caps` | Market capitalisation (Finnhub) | Finnhub (optional) |
+| `dedupe` | Marks the same news story arriving twice | none |
 
 ## Your keys
 
@@ -151,6 +222,7 @@ config.yaml            behaviour: schedule, risk limits, models, budget (no secr
 .env.example           template for your private keys
 docker-compose.yml     db + app + dashboard
 src/papertrader/
+  ingest/              data loading: one file per source, plus pipeline.py
   safety.py            the paper-only guard
   config.py            reads and validates config.yaml and .env
   logging_setup.py     JSON logs
@@ -159,7 +231,7 @@ src/papertrader/
   db/                  tables, migrations, sessions
   scheduler/           the long-running service (heartbeat only, for now)
   dashboard/           Streamlit status page
-  ingest/ agents/ judge/ model/ trading/ notify/ learning/   built in later phases
+  agents/ judge/ model/ trading/ notify/ learning/   built in later phases
 tests/                 automated tests
 ```
 

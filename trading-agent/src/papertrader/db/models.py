@@ -36,6 +36,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -223,6 +224,10 @@ class Filing(Base):
     period_of_report: Mapped[date | None] = mapped_column(Date)
     url: Mapped[str | None] = mapped_column(Text)
     text_path: Mapped[str | None] = mapped_column(Text)  # extracted text on disk, if downloaded
+    primary_document: Mapped[str | None] = mapped_column(Text)
+    # For filings whose contents are read in a second step (Form 4, 13F):
+    # null = not read yet, "done", "failed" or "skipped".
+    detail_status: Mapped[str | None] = mapped_column(String(16), index=True)
     published_at: Mapped[datetime] = mapped_column(UTCDateTime)  # EDGAR acceptance time
     available_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
     ingested_at: Mapped[datetime] = _created()
@@ -240,6 +245,13 @@ class InsiderTransaction(Base):
     ticker: Mapped[str] = mapped_column(String(16), index=True)
     insider_name: Mapped[str] = mapped_column(String(255))
     insider_title: Mapped[str | None] = mapped_column(String(255))
+    owner_cik: Mapped[str | None] = mapped_column(String(10))
+    is_ten_percent_owner: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
+    security_title: Mapped[str | None] = mapped_column(String(128))
+    direct_ownership: Mapped[bool | None] = mapped_column(Boolean)
+    under_10b5_1_plan: Mapped[bool | None] = mapped_column(Boolean)  # pre-scheduled trade
     is_director: Mapped[bool] = mapped_column(Boolean, default=False)
     is_officer: Mapped[bool] = mapped_column(Boolean, default=False)
     transaction_date: Mapped[date] = mapped_column(Date)
@@ -264,10 +276,22 @@ class InstitutionalHolding(Base):
     manager_name: Mapped[str] = mapped_column(String(255))
     ticker: Mapped[str | None] = mapped_column(String(16), index=True)
     cusip: Mapped[str] = mapped_column(String(9))
+    title_of_class: Mapped[str | None] = mapped_column(String(64))
     report_period: Mapped[date] = mapped_column(Date)
     shares: Mapped[float] = mapped_column(Float)
     value_usd: Mapped[float] = mapped_column(Float)
     available_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+class SecurityIdentifier(Base):
+    """CUSIP -> ticker, built from the SEC's fails-to-deliver files. Used to read 13F holdings."""
+
+    __tablename__ = "security_identifiers"
+
+    cusip: Mapped[str] = mapped_column(String(9), primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    description: Mapped[str | None] = mapped_column(String(128))
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
 
 class EarningsEvent(Base):

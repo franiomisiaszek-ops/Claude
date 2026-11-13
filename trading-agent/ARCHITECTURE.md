@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phase 1)
+## What exists today (Phases 1-2)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -28,13 +28,90 @@ database, so steps are independent: one can fail and be re-run without redoing t
 | Configuration | `config.py`, `config.yaml` | Validated settings. Unknown keys and out-of-range values are errors |
 | Secrets | `config.py` (`Settings`), `.env` | Loaded from the environment; wrapped so they cannot be printed |
 | Logging | `logging_setup.py` | One JSON object per line, UTC timestamps, secret-looking fields masked |
-| Database schema | `db/models.py` | All 30 tables for every phase |
+| Database schema | `db/models.py` | All 31 tables for every phase |
 | Migrations | `db/migrations/` | Alembic; runs automatically when the app starts |
 | Startup | `runtime.py` | Guard first, then config, then database |
 | CLI | `cli.py` | `papertrader check`, `db upgrade`, `run`, `version` |
 | Service | `scheduler/service.py` | APScheduler in New York time; only a heartbeat job so far |
 | Dashboard | `dashboard/` | Read-only Streamlit status page |
 | Health check | `healthcheck.py` | Docker marks the app unhealthy if the heartbeat stops |
+| Ingestion | `ingest/` | Loads and refreshes every data source (see below) |
+
+## Ingestion (Phase 2)
+
+```
+ingest/
+  http.py        rate limit + retries with backoff, one Fetcher per source
+  store.py       upsert (insert-or-update) and resume bookmarks
+  timeutil.py    New York <-> UTC, when a daily bar or filing counts as "known"
+  universe.py    index members, sectors, SEC identifiers, market cap
+  alpaca_data.py Alpaca data through the official alpaca-py SDK (data only, no trading)
+  bars.py        price bars
+  news.py        news, ticker mapping, de-duplication
+  sec.py         filing lists, Form 4 insider trades, 13F holdings, CUSIP map
+  earnings.py    Finnhub earnings calendar
+  macro.py       FRED series, with revision history
+  pipeline.py    runs the steps for a backfill or the daily refresh
+```
+
+How the requirements are met:
+
+- **Idempotent.** Every write is an upsert on a natural key (ticker + time, source + id,
+  SEC accession number...). Running anything twice changes nothing.
+- **Resumable.** `ingest_state` holds a bookmark per source and ticker. Work is committed
+  in small units (a chunk of tickers, a month of news, a batch of filings), so an
+  interrupted backfill continues from the last finished unit.
+- **Timestamps.** Every row has `available_at` in UTC, chosen conservatively:
+
+  | Data | `available_at` |
+  |---|---|
+  | Daily bar | 16:15 New York on that day (close + 15-minute delay); today's unfinished bar is never stored |
+  | News | last edit time of the article, because an edited article may contain later facts |
+  | SEC filing, insider trade, 13F holding | EDGAR acceptance time (true UTC, verified against live filings) |
+  | Earnings (Finnhub) | 09:30 for "before open", 20:00 New York for "after close" or unknown: late on purpose |
+  | Earnings (8-K item 2.02) | exact acceptance time of the filing |
+  | Macro, revised series | the day that version was published, 10:00 New York |
+  | Macro, market series | the next day, 18:00 New York |
+
+- **De-duplication.** `content_hash` is a hash of the headline with case and punctuation
+  removed. The earliest copy within 72 hours is the original; later copies (another
+  source, or a repost) get `duplicate_of_id`. Only exact headline matches are caught,
+  not rewordings.
+- **Ticker mapping.** News keeps the symbols the source gives. Filings map through the
+  SEC identifier (CIK). 13F holdings only carry CUSIP codes, so a CUSIP-to-ticker map is
+  built from the SEC's fails-to-deliver files (no key needed).
+- **Split and dividend safety.** Prices are stored adjusted. Each run re-reads the last 7
+  days; if a stored price no longer matches, the adjusted history changed and that
+  ticker's whole history is re-read.
+- **SEC rules.** Every request carries `SEC_USER_AGENT`; the rate is capped at 8 per
+  second (the SEC allows 10).
+- **Secrets.** FRED requires the key in the URL, so URLs are stripped of keys in error
+  messages and in third-party log lines.
+- **Failure isolation.** A missing key skips its step. A failing step is reported and the
+  others still run. One bad ticker or filing never stops a step.
+
+Backfill vs daily: the backfill reaches back `backfill.years`. The daily run only looks
+a short way back (news 7 days, filings 30, Form 4 details 14, 13F 200) so that it always
+finishes within the hour, even if the full backfill was never run.
+
+Known limits (also relevant for the Phase 4 backtest):
+
+- **Survivorship bias.** Only today's index members are loaded. Companies that left the
+  index in the last five years are missing, which makes any backtest look better than
+  reality. The table has join/leave dates for members seen from now on.
+- **Adjusted prices are today's view.** A past price is stored as adjusted by all later
+  splits and dividends. Returns are right; absolute past price levels are not what was
+  on screen that day.
+- **Finnhub history** on the free tier may be shorter than five years; whatever Finnhub
+  returns is stored.
+- **Earnings calendar dates for the past** carry no record of when the date was
+  announced, so past entries only count as known once results were out.
+- **Form 4 details** are read for the last 2 years by default (`ingest.form4_detail_years`);
+  a full S&P 500 load is roughly 75,000 documents, about 3 hours at the SEC's rate limit.
+- **13F** covers 15 chosen funds, share positions only (no options or bonds), and is by
+  nature 45 days old when published.
+- **Parquet** is not used yet. Prices fit comfortably in the database; the Phase 4
+  training dataset will be written as Parquet.
 
 ## Design rules
 
@@ -82,7 +159,7 @@ migrations ever disagree.
 
 | Group | Tables |
 |---|---|
-| Reference and ingested data | `universe_members`, `price_bars`, `news_items`, `news_tickers`, `filings`, `insider_transactions`, `institutional_holdings`, `earnings_events`, `macro_observations`, `ingest_state` |
+| Reference and ingested data | `universe_members`, `price_bars`, `news_items`, `news_tickers`, `filings`, `insider_transactions`, `institutional_holdings`, `security_identifiers`, `earnings_events`, `macro_observations`, `ingest_state` |
 | Research and decisions | `decision_cycles`, `agent_reports`, `model_versions`, `model_scores`, `judge_decisions`, `trade_ideas`, `trade_idea_reports`, `lessons` |
 | Trading | `trades`, `orders`, `fills`, `exit_signals`, `equity_snapshots` |
 | Learning | `prediction_outcomes`, `agent_stats`, `agent_weights` |
