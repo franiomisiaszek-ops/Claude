@@ -41,6 +41,10 @@ def upsert(
     """
     if not rows:
         return 0
+    # PostgreSQL rejects a statement that touches the same row twice, and real feeds do
+    # send repeats. Keep one row per key: the last one given.
+    unique = {tuple(row[col] for col in conflict): row for row in rows}
+    rows = list(unique.values())
     table = _table(model)
     update_cols = list(update)
     extra_cols = list(also_set)

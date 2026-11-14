@@ -67,6 +67,22 @@ def earnings_row(item: dict[str, Any], now: datetime) -> dict[str, Any] | None:
     }  # fmt: skip
 
 
+def _completeness(row: dict[str, Any]) -> tuple[bool, int]:
+    has_results = row["eps_actual"] is not None or row["revenue_actual"] is not None
+    return has_results, sum(value is not None for value in row.values())
+
+
+def one_per_event(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Finnhub sometimes lists one release twice (seen live: an estimate-only entry next
+    to the entry with the reported numbers). Keep the more complete one."""
+    best: dict[tuple[str, date], dict[str, Any]] = {}
+    for row in rows:
+        key = (row["ticker"], row["report_date"])
+        if key not in best or _completeness(row) > _completeness(best[key]):
+            best[key] = row
+    return list(best.values())
+
+
 async def ingest_earnings(
     ctx: IngestContext, tickers: Sequence[str], *, start: date, per_symbol: bool
 ) -> StepStats:
@@ -92,10 +108,10 @@ async def ingest_earnings(
             continue
         stats.requests += 1
         items = payload.get("earningsCalendar") if isinstance(payload, dict) else None
-        rows = [
+        rows = one_per_event([
             row for row in (earnings_row(item, now) for item in items or [])
             if row is not None and row["ticker"] in wanted
-        ]  # fmt: skip
+        ])  # fmt: skip
         with ctx.session_factory() as session:
             stats.rows += upsert(
                 session, EarningsEvent, rows,

@@ -110,6 +110,21 @@ def test_upsert_updates_only_when_a_value_really_changed(session: Session) -> No
     assert session.scalar(select(func.count()).select_from(MacroObservation)) == 1
 
 
+def test_upsert_survives_the_same_key_twice_in_one_batch(session: Session) -> None:
+    """Found on a real run: PostgreSQL refuses a statement that updates one row twice."""
+    key = ("series_id", "observation_date", "realtime_start")
+    assert (
+        upsert(session, MacroObservation, [_obs(1.0), _obs(2.0)], conflict=key, update=("value",))
+        == 1
+    )
+    assert (
+        upsert(session, MacroObservation, [_obs(3.0), _obs(4.0)], conflict=key, update=("value",))
+        == 1
+    )
+    session.commit()
+    assert session.scalars(select(MacroObservation.value)).all() == [4.0]  # the last one wins
+
+
 def test_upsert_handles_large_batches(session: Session) -> None:
     rows = [{"key": f"k{i}", "value": {"i": i}, "updated_at": NOW} for i in range(1200)]
     assert upsert(session, SystemState, rows, conflict=("key",)) == 1200

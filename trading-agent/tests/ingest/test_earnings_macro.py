@@ -98,6 +98,37 @@ async def test_backfill_is_per_symbol_and_updates_when_results_arrive(engine: En
     )  # 20:00 New York, EST
 
 
+async def test_finnhub_listing_one_release_twice_keeps_the_entry_with_results(
+    engine: Engine,
+) -> None:
+    """The real data that broke the first full run (Amcor, 4 November 2026)."""
+    payload = {"earningsCalendar": [
+        calendar_item("AMCR", "2027-02-01", "", None, year=2027, quarter=2),
+        calendar_item("AMCR", "2026-11-04", "amc", None, year=2027, quarter=1, epsEstimate=0.9852),
+        calendar_item("AMCR", "2026-11-04", "amc", 0.95, year=2026, quarter=3, epsEstimate=0.986),
+    ]}  # fmt: skip
+    ctx = make_ctx(engine, finnhub=fetcher(lambda _r: httpx.Response(200, json=payload), "finnhub"))
+
+    stats = await ingest_earnings(ctx, ["AMCR"], start=date(2021, 11, 13), per_symbol=True)
+    assert stats.rows == 2
+    with ctx.session_factory() as session:
+        events = session.scalars(select(EarningsEvent).order_by(EarningsEvent.report_date)).all()
+    reported, upcoming = events
+    assert (reported.report_date, reported.eps_actual, reported.eps_estimate) == (
+        date(2026, 11, 4),
+        0.95,
+        0.986,
+    )
+    assert (upcoming.report_date, upcoming.eps_actual, upcoming.time_of_day) == (
+        date(2027, 2, 1),
+        None,
+        None,
+    )
+    assert (
+        await ingest_earnings(ctx, ["AMCR"], start=date(2021, 11, 13), per_symbol=True)
+    ).rows == 0
+
+
 # ----------------------------------------------------------------------------- FRED
 
 

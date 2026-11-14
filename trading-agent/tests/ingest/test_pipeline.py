@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 import pytest
 from alpaca.common.rest import RESTClient
-from sqlalchemy import Engine, func, select
+from sqlalchemy import Engine, func, select, text
 from typer.testing import CliRunner
 
 from papertrader.cli import app
@@ -189,6 +189,32 @@ def test_without_a_stock_list_per_stock_steps_are_skipped_not_reported_ok(engine
     assert all(reasons[name] == pipeline.NO_STOCKS for name in per_stock)
     # Prices for the benchmark and macro data do not depend on the stock list.
     assert reasons["bars"] is None and reasons["macro"] is None and reasons["dedupe"] is None
+
+
+async def test_a_database_error_is_reported_in_one_short_line(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first real failure printed pages of SQL into the summary table."""
+    ctx, _alpaca, _hits = full_world(engine)
+
+    async def broken(*_args: Any, **_kwargs: Any) -> Any:
+        with ctx.session_factory() as session:
+            session.execute(
+                text("INSERT INTO price_bars (ticker) VALUES ('X')")
+            )  # violates NOT NULL
+
+    monkeypatch.setattr(pipeline, "ingest_macro", broken)
+    results = {
+        r.name: r
+        for r in await run_backfill(
+            ctx, years=1, tickers=TICKERS[:2], only=["universe", "macro", "dedupe"]
+        )
+    }
+    detail = results["macro"].detail
+    assert results["macro"].status == "failed" and results["dedupe"].status == "ok"
+    assert "\n" not in detail and len(detail) < 260
+    assert "INSERT INTO" not in detail and "[test_pipeline.py:" not in detail
+    assert "null" in detail.lower()  # the database's own reason is still there
 
 
 async def test_one_failing_step_does_not_stop_the_rest(engine: Engine) -> None:

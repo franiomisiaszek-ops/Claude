@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import logging
 import time as clock
+import traceback
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
+from pathlib import Path
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import DBAPIError
 
 from papertrader.db import models as m
 from papertrader.ingest.bars import ingest_bars
@@ -69,6 +72,23 @@ class StepResult:
 Step = tuple[str, str | None, Callable[[], Awaitable[StepStats]]]
 
 
+def describe_error(exc: BaseException) -> str:
+    """One short line: what went wrong and where in our code.
+
+    Database errors carry the whole SQL statement and its data in their message; only
+    the database's own first line is kept.
+    """
+    cause = exc.orig if isinstance(exc, DBAPIError) and exc.orig is not None else exc
+    lines = str(cause).strip().splitlines()
+    message = lines[0] if lines else ""
+    where = ""
+    for frame in reversed(traceback.extract_tb(exc.__traceback__)):
+        if "papertrader" in frame.filename:
+            where = f" [{Path(frame.filename).name}:{frame.lineno}]"
+            break
+    return f"{type(cause).__name__}: {message}"[:220] + where
+
+
 async def _run(steps: Sequence[Step], only: Sequence[str] | None) -> list[StepResult]:
     results: list[StepResult] = []
     for name, missing, action in steps:
@@ -85,14 +105,12 @@ async def _run(steps: Sequence[Step], only: Sequence[str] | None) -> list[StepRe
             # A refused or failed download is an expected kind of failure: one clear line.
             # Anything else is a bug, so the full traceback is logged.
             expected = isinstance(exc, FetchError | UniverseError)
-            log.error(
-                "ingest step failed",
-                extra={"step": name, "error": f"{type(exc).__name__}: {exc}"},
-                exc_info=not expected,
-            )
+            summary = describe_error(exc)
+            log.error("ingest step failed", extra={"step": name, "error": summary})
+            if not expected:  # a bug: the full details go to the debug log only
+                log.debug("traceback for failed step", extra={"step": name}, exc_info=True)
             results.append(
-                StepResult(name, "failed", seconds=clock.monotonic() - started,
-                           detail=f"{type(exc).__name__}: {exc}"[:300])
+                StepResult(name, "failed", seconds=clock.monotonic() - started, detail=summary)
             )  # fmt: skip
             continue
         result = StepResult(name, "ok", stats.rows, stats.requests, clock.monotonic() - started,
