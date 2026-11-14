@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -227,6 +227,69 @@ def model_train() -> None:
     except OSError:
         typer.echo(f"\nReport: {result.html_path}")
     typer.echo("Print it here with: papertrader model report")
+
+
+def _text_client() -> tuple[Any, Any, Any]:
+    """Runtime, Claude client and governor for the text-feature commands."""
+    from papertrader.llm import client as llm_client
+    from papertrader.llm.governor import CostGovernor
+    from papertrader.runtime import bootstrap
+
+    try:
+        runtime = bootstrap(migrate=True, log_format="console")
+    except (ConfigError, LiveTradingForbiddenError) as exc:
+        raise _fail(str(exc)) from exc
+    key = runtime.settings.anthropic_api_key
+    if key is None:
+        raise _fail("ANTHROPIC_API_KEY is not set in .env.")
+    governor = CostGovernor(runtime.session_factory, runtime.config.budget)
+    return runtime, llm_client.make_anthropic(key.get_secret_value()), governor
+
+
+@model_app.command("text-submit")
+def model_text_submit(
+    limit: Annotated[int, typer.Option(help="At most this many headlines in this batch.")] = 20000,
+) -> None:
+    """Send masked historical headlines to Claude for labelling (Batches API, half price).
+
+    Results are not immediate: run `papertrader model text-collect` later (usually
+    within an hour) to store them. Optional: the model trains without these features.
+    """
+    from papertrader.llm.client import BudgetExceededError
+    from papertrader.model.llm_text import submit
+
+    runtime, api, governor = _text_client()
+    try:
+        batch_id, items, estimate = asyncio.run(
+            submit(api, runtime.session_factory, runtime.config, governor, limit=limit)
+        )
+    except BudgetExceededError as exc:
+        raise _fail(f"Not sent: {exc}") from exc
+    if batch_id is None:
+        typer.echo("Nothing to send: every eligible headline already has features or is waiting.")
+        return
+    typer.echo(f"Sent {items:,} masked headlines as batch {batch_id}.")
+    typer.echo(f"Estimated cost: at most about ${estimate:.2f} (billed at half price).")
+    typer.echo("Collect the results later with: papertrader model text-collect")
+
+
+@model_app.command("text-collect")
+def model_text_collect() -> None:
+    """Store the results of finished text batches and record their cost."""
+    from papertrader.model.llm_text import collect
+
+    runtime, api, _governor = _text_client()
+    summary = asyncio.run(collect(api, runtime.session_factory, runtime.config))
+    typer.echo(
+        f"Stored features for {summary['stored']:,} headlines; cost ${summary['cost_usd']:.3f}."
+    )
+    if summary["failed_requests"]:
+        typer.echo(f"{summary['failed_requests']} request(s) gave no usable answer; "
+                   "those headlines will be sent again next time.")  # fmt: skip
+    if summary["still_running"]:
+        typer.echo(
+            f"Still being processed: {', '.join(summary['still_running'])}. Try again later."
+        )
 
 
 @model_app.command("report")

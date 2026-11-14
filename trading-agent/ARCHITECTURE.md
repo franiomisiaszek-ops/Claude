@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phases 1-3)
+## What exists today (Phases 1-4)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -40,6 +40,7 @@ database, so steps are independent: one can fail and be re-run without redoing t
 | Research agents | `agents/` | Point-in-time snapshot, 8 agent types, citation checks |
 | Judge | `judge/` | Weighs reports, proposes trades; code checks and scores them |
 | Research cycle | `research/` | Runs agents, contrarian and judge; `dry-run` output |
+| Pattern model | `model/` | Dataset, walk-forward training, calibration, backtest, report, live scores |
 
 ## Ingestion (Phase 2)
 
@@ -159,8 +160,7 @@ are filled in by the program, never taken from the model.
   `dry-run` prints how many calls hit the cache.
 - Verified against the real API on 2026-11-14: 16 calls, no errors, structured outputs
   valid, cache read on every agent call after the first.
-- Batches API: not used yet. It is for bulk, non-urgent work and arrives with the Phase 4
-  historical feature extraction.
+- Batches API: used for the bulk labelling of masked historical headlines (Phase 4).
 
 **Cost governor** (`llm/governor.py`). Before each call it reserves an estimate; after the
 call the real cost is written to `api_usage`. Reservations stop parallel calls from
@@ -206,6 +206,90 @@ Known limits:
 - **Agent reliability weights are all 1.0** until the learning loop (Phase 7) has outcomes.
 - **Holidays are not known yet**; "fresh" news reaches back over weekends only. The Alpaca
   market calendar arrives with the scheduler (Phase 7).
+
+## Pattern model (Phase 4)
+
+```
+model/text.py       masking; keyword event types and word-list sentiment (no LLM)
+model/features.py   the feature builder, shared by training and live scoring
+model/dataset.py    reads prices and events from the database; Parquet output
+model/train.py      LightGBM, walk-forward folds with embargo, calibration, metrics
+model/backtest.py   position simulation with costs; SPY and random-pick baselines
+model/report.py     Markdown + HTML report, disclaimer and automatic warnings
+model/registry.py   model versions and the promotion rule
+model/score.py      today's probabilities for the judge
+model/llm_text.py   optional Claude labels for MASKED headlines (Batches API)
+```
+
+**What one row is.** One stock on one trading day on which something happened (news, an
+8-K, an earnings release, an insider trade) between the previous decision time and that
+day's decision time (08:20 New York). Target: does the stock beat SPY over the next five
+trading days.
+
+**Timing, where leakage hides.**
+
+```
+events up to 08:20 on day D   ->  features, with prices up to the close of D-1
+enter at the OPEN of day D    ->  hold h trading days
+exit at the CLOSE of D+h-1    ->  label = return minus SPY's over the same window
+```
+
+The overnight gap into day D is deliberately not a feature: at 08:20 the system does not
+know it. Tests rewrite every price from an entry day onwards and check that no feature
+changes, and check that the rows built live "this morning" equal the rows history shows
+for that day afterwards.
+
+**Features.** Momentum over 1/5/20/60 days (raw and relative to SPY), volatility, volume
+against its average, distance from the 52-week high and low, market regime (SPY trend
+and volatility), sector, day of week, and event features: news counts, keyword event
+types, word-list sentiment, earnings and surprise where known, 8-K item flags, insider
+buying and selling, and Claude's labels where they exist.
+
+**Validation.** Walk-forward only: the days are cut into seven blocks; the model is
+tested on blocks two to seven, each time trained on everything earlier minus an embargo
+of ten trading days so no label overlaps the test block. Nothing is shuffled.
+
+**Calibration.** Raw scores are mapped to probabilities using scores the same kind of
+model produced for days it had not seen (a walk-forward inside the training window).
+Isotonic regression is used when there are at least 1,500 such examples, otherwise the
+smoother Platt curve. With few examples the probability is also pulled toward 50%
+(by rows / (rows + 300)), so a model built on little data cannot sound confident.
+
+**Backtest.** Each day buy up to three candidates with probability at least 0.55, 10% of
+the account each, at most ten positions, hold five days; ten basis points per side for
+commission and slippage. Compared with SPY buy-and-hold over the same days and with 200
+random selections of the same number of stocks from the same candidates on the same
+days. Reported: hit rate, information coefficient, Brier score, AUC, calibration table,
+Sharpe, maximum drawdown, turnover.
+
+**The report polices itself.** It opens with the disclaimer (backtests flatter, leakage
+through Claude, survivorship bias, forward paper trading is the real test) and adds
+warnings automatically: too little data; results too good to be true (daily IC above
+0.08, top-decile hit rate above 62%, Sharpe above 2); no better than random picks; no
+ranking skill; probabilities no better than the base rate.
+
+**Promotion.** A new model becomes active only if it has positive IC on the latest unseen
+window, its probabilities beat the base rate, and it beats the active model on that
+window (the active model is only tested on days after its own training ended). A first
+model with no measurable skill is not promoted either: no model is the honest state.
+
+**Masked text features (optional).** `model text-submit` sends headlines to Claude through
+the Message Batches API (half price, cheapest model, cached instructions), with company
+names, tickers, dates, years and quarters replaced by placeholders, and asks only what
+the text says. `model text-collect` stores the answers and their cost. Ids the model
+invents are ignored; out-of-range numbers are pulled into range.
+
+Known limits:
+
+- **Masking is partial.** A famous product or a unique deal size can still identify an
+  event. Results that depend on Claude's labels are optimistic.
+- **Survivorship bias** and **adjusted prices**, as described under ingestion.
+- **Daily bars only.** Entry is assumed at the official open and exit at the close; real
+  fills at 09:35 will differ, and a stop or target inside the day is not simulated.
+- **No historical earnings surprise** on the free Finnhub plan, so that feature is
+  mostly empty in history.
+- **The backtest rule is simpler than the live system**: no sector limit, no judge, no
+  agents. It tests the model alone.
 
 ## Design rules
 
@@ -281,13 +365,6 @@ uv run alembic revision --autogenerate -m "describe the change"
 Review the generated file in `src/papertrader/db/migrations/versions/`, run the tests, commit both.
 
 ## Planned design for later phases
-
-### Pattern model and leakage *(planned, Phase 4)*
-
-Claude has seen historical market outcomes in its training data, so its judgement on past
-events is contaminated. Historical features therefore come from ticker- and date-masked
-text or non-LLM models; training is walk-forward only with an embargo; and every backtest
-report will state that backtests are optimistic and **forward paper trading is the real test**.
 
 ## Testing
 

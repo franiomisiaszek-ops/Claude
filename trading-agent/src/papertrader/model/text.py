@@ -74,12 +74,60 @@ def name_variants(name: str) -> list[str]:
     return sorted((v for v in variants if len(v) >= 3), key=len, reverse=True)
 
 
-def _replace_words(text: str, words: Iterable[str], placeholder: str) -> str:
-    for word in sorted(set(words), key=len, reverse=True):
-        if word:
-            text = re.sub(rf"(?<![A-Za-z0-9]){re.escape(word)}(?:'s)?(?![A-Za-z0-9])", placeholder,
-                          text, flags=re.IGNORECASE)  # fmt: skip
-    return text
+class Masker:
+    """Masks a whole universe of companies in one pass per text.
+
+    Built once from (ticker, company name) pairs. For each text, mentions of the
+    companies the story is about become [COMPANY]; every other known company becomes
+    [OTHER]; dates, years and quarters become [DATE].
+    """
+
+    def __init__(self, companies: Iterable[tuple[str, str]]) -> None:
+        self._owners: dict[str, set[str]] = {}
+        tickers: set[str] = set()
+        for ticker, name in companies:
+            for variant in name_variants(name):
+                self._owners.setdefault(variant.lower(), set()).add(ticker)
+            if len(ticker) >= 2:  # one-letter tickers would eat ordinary words
+                tickers.add(ticker)
+                self._owners.setdefault(ticker, set()).add(ticker)
+        names = sorted((n for n in self._owners if n not in tickers), key=len, reverse=True)
+        self._names = (
+            re.compile(
+                r"(?<![A-Za-z0-9])("
+                + "|".join(re.escape(n) for n in names)
+                + r")(?:'s|\u2019s)?(?![A-Za-z0-9])",
+                re.IGNORECASE,
+            )
+            if names
+            else None
+        )
+        # Tickers are matched case-sensitively and whole, so "ALL" does not eat "all".
+        ordered = sorted(tickers, key=len, reverse=True)
+        self._tickers = (
+            re.compile(
+                r"(?<![A-Za-z0-9.])("
+                + "|".join(re.escape(t) for t in ordered)
+                + r")(?![A-Za-z0-9])"
+            )
+            if ordered
+            else None
+        )
+
+    def mask(self, text: str, own: Iterable[str]) -> str:
+        mine = set(own)
+
+        def swap(key: str) -> str:
+            return COMPANY if self._owners.get(key, set()) & mine else OTHER
+
+        masked = _TICKER_TAG.sub("", text)
+        if self._names is not None:
+            masked = self._names.sub(lambda match: swap(match.group(1).lower()), masked)
+        if self._tickers is not None:
+            masked = self._tickers.sub(lambda match: swap(match.group(1)), masked)
+        for pattern in _DATE_PATTERNS:
+            masked = pattern.sub(DATE, masked)
+        return " ".join(masked.split())
 
 
 def mask_text(
@@ -89,19 +137,8 @@ def mask_text(
     others: Iterable[tuple[str, str]] = (),
 ) -> str:
     """Hide who and when. `own` / `others` are (ticker, company name) pairs."""
-    own, others = list(own), list(others)
-    masked = _TICKER_TAG.sub("", text)
-    for pairs, placeholder in ((own, COMPANY), (others, OTHER)):
-        names = [variant for _ticker, name in pairs for variant in name_variants(name)]
-        masked = _replace_words(masked, names, placeholder)
-        # Tickers are matched case-sensitively and whole, so "A" or "ALL" do not eat words.
-        for ticker, _name in sorted(pairs, key=lambda p: len(p[0]), reverse=True):
-            if len(ticker) >= 2:
-                masked = re.sub(rf"(?<![A-Za-z0-9.]){re.escape(ticker)}(?![A-Za-z0-9])",
-                                placeholder, masked)  # fmt: skip
-    for pattern in _DATE_PATTERNS:
-        masked = pattern.sub(DATE, masked)
-    return " ".join(masked.split())
+    own = list(own)
+    return Masker([*own, *others]).mask(text, [ticker for ticker, _name in own])
 
 
 # --------------------------------------------------------------------------- no-LLM features

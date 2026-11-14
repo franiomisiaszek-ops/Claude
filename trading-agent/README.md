@@ -24,7 +24,7 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 | 1 | Scaffold: config, database, logging, CI, Docker | **done** |
 | 2 | Data ingestion + historical backfill | **done** (needs your test run, see below) |
 | 3 | Research agents + judge + `dry-run` | **done** (real API verified; a run on real prices still to do) |
-| 4 | Pattern model + backtest report | not started |
+| 4 | Pattern model + backtest report | **done** (trained on synthetic data only so far, see below) |
 | 5 | Trading engine + risk rules | not started |
 | 6 | Telegram | not started |
 | 7 | Learning loop + scheduler | not started |
@@ -223,6 +223,59 @@ The agents:
 
 Agents with nothing new to look at are skipped and cost nothing. Each agent's model and
 effort can be changed in `config.yaml` under `agents.overrides`.
+
+## Train the pattern model (Phase 4)
+
+The pattern model learns from history how stocks moved after news, filings, earnings and
+insider trades, and gives the judge a probability that a stock beats the market over the
+next five days. Training needs no API key and costs nothing.
+
+```bash
+docker compose run --rm app papertrader model train
+```
+
+This builds the dataset from everything loaded so far, tests the model the honest way
+(always on days later than the ones it learned from), runs a backtest against two
+baselines, and writes a report. Open the report in the `reports` folder next to this
+file (`..._backtest_report.html`), or print it:
+
+```bash
+docker compose run --rm app papertrader model report
+```
+
+```bash
+docker compose run --rm app papertrader model status
+```
+
+How to read the result:
+
+- The report starts with warnings. Read them. A backtest replays the past and always
+  looks better than real trading.
+- **"Too little data"** appears until much more history is loaded. Twenty stocks is
+  enough to prove the machinery works, not to prove anything about markets.
+- **"Not distinguishable from random picks"** means exactly that: choosing at random
+  from the same stocks on the same days did about as well.
+- **"These results look too good"** means a bug or leaked future information is the
+  likely explanation, not a discovery.
+- A model is only switched on ("promoted") if it shows measurable skill on days it never
+  saw and beats the model already in use. With no model switched on, the judge decides
+  on the agents' reports alone. That is the normal, honest state until a model earns it.
+
+Optional: text features from Claude. Historical headlines can be labelled by Claude
+(event type, sentiment, importance). To stop Claude from "remembering" what a stock did
+next, it only sees masked text: company names, tickers and dates are replaced by
+placeholders. This uses the cheapest model at half price and is not immediate:
+
+```bash
+docker compose run --rm app papertrader model text-submit --limit 20000
+```
+
+```bash
+docker compose run --rm app papertrader model text-collect
+```
+
+Run the second command later (usually within the hour), then train again. Masking
+reduces the leak but cannot remove it; the report says how many rows used these features.
 
 ## Your keys
 
