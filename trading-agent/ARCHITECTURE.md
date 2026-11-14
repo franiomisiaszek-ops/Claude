@@ -87,6 +87,10 @@ How the requirements are met:
   second (the SEC allows 10).
 - **Secrets.** FRED requires the key in the URL, so URLs are stripped of keys in error
   messages and in third-party log lines.
+- **The universe never goes missing.** The member list comes from Wikipedia. If that
+  fails (refused, down, or layout changed), an existing list is kept untouched; an empty
+  database is filled from the list shipped in `ingest/snapshots/`. Steps that work per
+  stock are reported as skipped, never as "ok", if there is no stock list.
 - **Failure isolation.** A missing key skips its step. A failing step is reported and the
   others still run. One bad ticker or filing never stops a step.
 

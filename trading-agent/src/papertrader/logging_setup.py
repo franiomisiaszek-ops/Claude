@@ -81,13 +81,31 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str, ensure_ascii=False)
 
 
+class ConsoleFormatter(logging.Formatter):
+    """Plain lines for a person at a terminal: time, level, message, then the details."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        stamp = datetime.fromtimestamp(record.created, tz=UTC).strftime("%H:%M:%S")
+        details = " ".join(
+            f"{key}={_redact(key, value)}"
+            for key, value in record.__dict__.items()
+            if key not in _STANDARD_ATTRS and not key.startswith("_")
+        )
+        line = f"{stamp} {record.levelname:<7} {record.getMessage()}"
+        if details:
+            line += f"  ({details})"
+        if record.exc_info:
+            line += "\n" + self.formatException(record.exc_info)
+        return line
+
+
 def configure_logging(level: str = "INFO", fmt: Literal["json", "console"] = "json") -> None:
     """Replace the root logger's handlers with a single stdout handler."""
     handler = logging.StreamHandler(sys.stdout)
     if fmt == "json":
         handler.setFormatter(JsonFormatter())
     else:
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
+        handler.setFormatter(ConsoleFormatter())
 
     install_url_redaction()
     root = logging.getLogger()

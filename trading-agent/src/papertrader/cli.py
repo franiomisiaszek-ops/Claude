@@ -113,7 +113,8 @@ def _ingest(mode: str, **options: object) -> None:
         if unknown:
             raise _fail(f"unknown step(s) {', '.join(unknown)}. Steps: {', '.join(STEPS)}")
     try:
-        runtime = bootstrap(migrate=True)
+        # These commands are run by a person at a terminal: plain lines, not JSON.
+        runtime = bootstrap(migrate=True, log_format="console")
     except (ConfigError, LiveTradingForbiddenError) as exc:
         raise _fail(str(exc)) from exc
 

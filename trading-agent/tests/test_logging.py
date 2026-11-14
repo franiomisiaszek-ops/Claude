@@ -58,6 +58,18 @@ def test_level_filtering(capsys: pytest.CaptureFixture[str]) -> None:
     assert capsys.readouterr().out == ""
 
 
+def test_console_format_is_one_readable_line_with_details(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configure_logging("INFO", "console")
+    logging.getLogger("papertrader.test").info(
+        "ingest step done", extra={"step": "bars", "rows": 15060, "api_key": "sk-secret"}
+    )
+    line = capsys.readouterr().out.strip()
+    assert line.endswith("INFO    ingest step done  (step=bars rows=15060 api_key=***)")
+    assert "sk-secret" not in line and not line.startswith("{")
+
+
 def test_api_keys_inside_urls_are_masked() -> None:
     url = "GET https://api.example.com/x?series_id=DGS10&api_key=abc123&file_type=json"
     assert redact_url_secrets(url) == (

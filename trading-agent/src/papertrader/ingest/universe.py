@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import csv
 import logging
 from dataclasses import dataclass, replace
 from datetime import date
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -28,6 +30,10 @@ INDEX_PAGES = {
 # A parsed list far outside these sizes means the page layout changed; we then keep
 # the old universe rather than wiping it.
 EXPECTED_SIZE = {"sp500": (480, 520), "sp100": (95, 105)}
+# Member lists shipped with the program, used only when the live list cannot be read
+# and the database has no universe yet.
+SNAPSHOT_DIR = Path(__file__).resolve().parent / "snapshots"
+SNAPSHOT_DATE = date(2026, 11, 13)
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 FINNHUB_PROFILE_URL = "https://finnhub.io/api/v1/stock/profile2"
 
@@ -203,33 +209,83 @@ def sync_universe(
     return added, removed
 
 
+def load_snapshot(index: str) -> list[Constituent]:
+    """The member list shipped with the program (as of SNAPSHOT_DATE)."""
+    path = SNAPSHOT_DIR / f"{index}.csv"
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [
+            Constituent(
+                ticker=row["ticker"],
+                name=row["name"],
+                sector=row["sector"] or None,
+                sub_industry=row["sub_industry"] or None,
+                cik=row["cik"] or None,
+                added_on=_parse_date(row["added_on"]),
+            )
+            for row in csv.DictReader(handle)
+        ]
+
+
+async def _online_members(ctx: IngestContext, index: str) -> list[Constituent]:
+    constituents = parse_constituents(await ctx.web.get_text(INDEX_PAGES[index]))
+    low, high = EXPECTED_SIZE[index]
+    if not low <= len(constituents) <= high:
+        raise UniverseError(
+            f"read {len(constituents)} members for {index}, expected {low}-{high}; "
+            "the page layout may have changed"
+        )
+    return constituents
+
+
 async def ingest_universe(ctx: IngestContext) -> StepStats:
-    """Refresh index membership (Wikipedia) and SEC identifiers (SEC)."""
+    """Refresh index membership and SEC identifiers.
+
+    The member list comes from Wikipedia. If that fails (the site refuses the request,
+    is down, or changed its layout) the program never ends up without a universe:
+    an existing list is kept as it is, and an empty database is filled from the list
+    shipped with the program.
+    """
     stats = StepStats()
     cfg: AppConfig = ctx.config
     index = cfg.universe.index
+    today = new_york_date(ctx.now())
 
     sec_lookup: dict[str, tuple[str, str]] = {}
-    if ctx.sec is not None:
-        sec_lookup = parse_sec_tickers(await ctx.sec.get_json(SEC_TICKERS_URL))
-        stats.requests += 1
+    if ctx.sec is None:
+        stats.note("SEC_USER_AGENT not set: SEC identifiers only where the list has them")
     else:
-        stats.note("SEC_USER_AGENT not set: SEC identifiers only where the index page has them")
+        try:
+            sec_lookup = parse_sec_tickers(await ctx.sec.get_json(SEC_TICKERS_URL))
+            stats.requests += 1
+        except FetchError as exc:
+            stats.note(f"SEC identifier list unavailable ({exc})")
 
+    source = "Wikipedia"
     if index == "custom":
+        source = "config.yaml"
         constituents = [
             Constituent(ticker=t.upper(), name=sec_lookup.get(plain_symbol(t), ("", t.upper()))[1])
             for t in cfg.universe.custom_tickers
         ]
     else:
-        html = await ctx.web.get_text(INDEX_PAGES[index])
-        stats.requests += 1
-        constituents = parse_constituents(html)
-        low, high = EXPECTED_SIZE[index]
-        if not low <= len(constituents) <= high:
-            raise UniverseError(
-                f"read {len(constituents)} members for {index}, expected {low}-{high}; the page "
-                "layout may have changed. The stored universe was left untouched."
+        try:
+            constituents = await _online_members(ctx, index)
+            stats.requests += 1
+        except (FetchError, UniverseError) as exc:
+            with ctx.session_factory() as session:
+                stored = len(active_members(session, index))
+                last = get_cursor(session, "universe", index).get("refreshed_on", "never")
+            if stored:
+                stats.note(
+                    f"could not refresh the list ({exc}); kept the stored {stored} members "
+                    f"(last refreshed {last})"
+                )
+                return stats
+            constituents = load_snapshot(index)
+            source = f"the built-in list from {SNAPSHOT_DATE.isoformat()}"
+            stats.note(
+                f"could not read the live list ({exc}); used {source}. Index changes after "
+                "that date are missing until the live list works"
             )
 
     constituents = [
@@ -238,7 +294,9 @@ async def ingest_universe(ctx: IngestContext) -> StepStats:
     ]
 
     with ctx.session_factory() as session:
-        added, removed = sync_universe(session, index, constituents, new_york_date(ctx.now()))
+        added, removed = sync_universe(session, index, constituents, today)
+        if source in ("Wikipedia", "config.yaml"):
+            set_cursor(session, "universe", index, {"refreshed_on": today.isoformat()})
         session.commit()
     stats.rows = added + removed
     missing_cik = sum(1 for c in constituents if not c.cik)

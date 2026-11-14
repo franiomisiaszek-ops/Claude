@@ -179,6 +179,18 @@ async def test_missing_keys_skip_their_steps_and_say_why(engine: Engine) -> None
     assert "optional" in results["macro"].detail and "optional" in results["earnings"].detail
 
 
+def test_without_a_stock_list_per_stock_steps_are_skipped_not_reported_ok(engine: Engine) -> None:
+    ctx, _alpaca, _hits = full_world(engine)
+    reasons = {
+        name: missing for name, missing, _ in pipeline._steps(ctx, [], years=5, backfill=True)
+    }
+    per_stock = ("cusip_map", "news", "finnhub_news", "filings", "insiders", "holdings_13f",
+                 "earnings", "market_caps")  # fmt: skip
+    assert all(reasons[name] == pipeline.NO_STOCKS for name in per_stock)
+    # Prices for the benchmark and macro data do not depend on the stock list.
+    assert reasons["bars"] is None and reasons["macro"] is None and reasons["dedupe"] is None
+
+
 async def test_one_failing_step_does_not_stop_the_rest(engine: Engine) -> None:
     ctx, alpaca, _hits = full_world(engine)
     alpaca.fail_when = lambda _symbols: True
@@ -339,10 +351,14 @@ def test_cli_backfill_without_keys_explains_what_was_skipped(
     monkeypatch.setattr(httpx.AsyncClient, "get", offline)
     monkeypatch.setattr("papertrader.ingest.http.asyncio.sleep", lambda _s: _noop())
     result = runner.invoke(app, ["ingest", "backfill", "--limit", "20", "--years", "1"])
-    assert result.exit_code == 1  # the universe page could not be fetched
-    assert "universe      failed" in result.output
+    assert result.exit_code == 0, result.output
+    assert "universe      ok" in result.output
+    assert "built-in list from 2026-11-13" in result.output  # no network: the shipped list is used
     assert "ALPACA_API_KEY / ALPACA_SECRET_KEY not set" in result.output
-    assert "can be re-run safely" in result.output
+    assert '{"ts"' not in result.output  # readable lines, not JSON, for a person at a terminal
+
+    status = runner.invoke(app, ["ingest", "status"])
+    assert "universe_members" in status.output and "503" in status.output
 
 
 async def _noop() -> None:

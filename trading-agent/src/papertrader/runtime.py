@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Literal
 
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -25,13 +26,16 @@ class Runtime:
     session_factory: sessionmaker[Session]
 
 
-def bootstrap(*, migrate: bool = False) -> Runtime:
+def bootstrap(
+    *, migrate: bool = False, log_format: Literal["json", "console"] | None = None
+) -> Runtime:
     """Everything that must be true before any other code runs.
 
     The paper-only guard comes first: if it fails, nothing else is touched.
+    `log_format` overrides LOG_FORMAT for commands a person runs at a terminal.
     """
     settings = get_settings()
-    configure_logging(settings.log_level, settings.log_format)
+    configure_logging(settings.log_level, log_format or settings.log_format)
 
     api_key = settings.alpaca_api_key.get_secret_value() if settings.alpaca_api_key else None
     assert_paper_only(ALPACA_PAPER_BASE_URL, api_key=api_key)

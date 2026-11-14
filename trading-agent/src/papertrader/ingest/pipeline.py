@@ -18,6 +18,7 @@ from papertrader.db import models as m
 from papertrader.ingest.bars import ingest_bars
 from papertrader.ingest.context import IngestContext, StepStats
 from papertrader.ingest.earnings import ingest_earnings
+from papertrader.ingest.http import FetchError
 from papertrader.ingest.macro import ingest_macro
 from papertrader.ingest.news import dedupe_news, ingest_alpaca_news, ingest_finnhub_news
 from papertrader.ingest.sec import (
@@ -29,6 +30,7 @@ from papertrader.ingest.sec import (
 )
 from papertrader.ingest.timeutil import new_york_date
 from papertrader.ingest.universe import (
+    UniverseError,
     active_members,
     ingest_market_caps,
     ingest_universe,
@@ -45,6 +47,9 @@ DAILY_NEWS_LOOKBACK = timedelta(days=7)
 DAILY_FILINGS_LOOKBACK = timedelta(days=30)
 DAILY_FORM4_LOOKBACK = timedelta(days=14)
 DAILY_HOLDINGS_LOOKBACK = timedelta(days=200)
+
+
+NO_STOCKS = "no stocks to work on: the universe is empty (the universe step must succeed first)"
 
 
 class SelectionError(ValueError):
@@ -77,7 +82,14 @@ async def _run(steps: Sequence[Step], only: Sequence[str] | None) -> list[StepRe
         try:
             stats = await action()
         except Exception as exc:
-            log.exception("ingest step failed", extra={"step": name})
+            # A refused or failed download is an expected kind of failure: one clear line.
+            # Anything else is a bug, so the full traceback is logged.
+            expected = isinstance(exc, FetchError | UniverseError)
+            log.error(
+                "ingest step failed",
+                extra={"step": name, "error": f"{type(exc).__name__}: {exc}"},
+                exc_info=not expected,
+            )
             results.append(
                 StepResult(name, "failed", seconds=clock.monotonic() - started,
                            detail=f"{type(exc).__name__}: {exc}"[:300])
@@ -135,9 +147,12 @@ def _steps(
         filings_since = new_york_date(now - DAILY_FILINGS_LOOKBACK)
         holdings_since = new_york_date(now - DAILY_HOLDINGS_LOOKBACK)
         form4_since = now - DAILY_FORM4_LOOKBACK
+    # Steps that work per stock have nothing to do without a stock list. Saying "ok"
+    # there would hide the real problem, so they are reported as skipped.
+    no_stocks = None if members else NO_STOCKS
     no_alpaca = None if ctx.alpaca else "ALPACA_API_KEY / ALPACA_SECRET_KEY not set"
-    no_sec = None if ctx.sec else "SEC_USER_AGENT not set"
-    no_finnhub = None if ctx.finnhub else "FINNHUB_API_KEY not set (optional)"
+    no_sec = (None if ctx.sec else "SEC_USER_AGENT not set") or no_stocks
+    no_finnhub = (None if ctx.finnhub else "FINNHUB_API_KEY not set (optional)") or no_stocks
     no_fred = None if ctx.fred else "FRED_API_KEY not set (optional)"
 
     tickers = [member.ticker for member in members]
@@ -156,7 +171,11 @@ def _steps(
     return [
         ("cusip_map", no_sec, lambda: refresh_cusip_map(ctx)),
         ("bars", no_alpaca, lambda: ingest_bars(ctx, price_tickers, start=start_day)),
-        ("news", no_alpaca, lambda: ingest_alpaca_news(ctx, tickers, start=news_start)),
+        (
+            "news",
+            no_alpaca or no_stocks,
+            lambda: ingest_alpaca_news(ctx, tickers, start=news_start),
+        ),
         (
             "finnhub_news",
             no_finnhub or (None if cfg.ingest.finnhub_news else "turned off in config.yaml"),

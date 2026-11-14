@@ -8,13 +8,14 @@ from sqlalchemy import Engine, func, select
 
 from papertrader.db.models import PriceBar, UniverseMember
 from papertrader.ingest.bars import ingest_bars
+from papertrader.ingest.context import web_user_agent
 from papertrader.ingest.store import get_cursor
 from papertrader.ingest.timeutil import at_new_york, daily_bar_available_at
 from papertrader.ingest.universe import (
-    UniverseError,
     active_members,
     ingest_market_caps,
     ingest_universe,
+    load_snapshot,
     parse_constituents,
     pick_spread,
     plain_symbol,
@@ -90,10 +91,66 @@ async def test_a_broken_page_never_wipes_the_universe(engine: Engine) -> None:
     pages = [wiki_page(many_rows(500)), "<html><body>layout changed</body></html>"]
     ctx = make_ctx(engine, web=fetcher(lambda _r: httpx.Response(200, text=pages.pop(0)), "web"))
     await ingest_universe(ctx)
-    with pytest.raises(UniverseError, match="left untouched"):
-        await ingest_universe(ctx)
+    stats = await ingest_universe(ctx)
+    assert stats.rows == 0
+    notes = " ".join(stats.notes)
+    assert "kept the stored 500 members (last refreshed 2026-11-13)" in notes
+    assert "layout may have changed" in notes
     with ctx.session_factory() as session:
         assert len(active_members(session, "sp500")) == 500
+
+
+async def test_when_wikipedia_refuses_an_empty_database_gets_the_built_in_list(
+    engine: Engine,
+) -> None:
+    """What happened on the first real run: Wikipedia answered HTTP 403."""
+    refusal = "<html><body><h1>Error</h1><p>Please respect our robot policy</p></body></html>"
+    ctx = make_ctx(engine, web=fetcher(lambda _r: httpx.Response(403, text=refusal), "web"))
+
+    stats = await ingest_universe(ctx)
+    assert stats.rows == 503
+    note = " ".join(stats.notes)
+    assert "HTTP 403" in note and "Please respect our robot policy" in note  # the reason is shown
+    assert "built-in list from 2026-11-13" in note
+    with ctx.session_factory() as session:
+        members = {m.ticker: m for m in active_members(session, "sp500")}
+        assert get_cursor(session, "universe", "sp500") == {}  # not counted as a live refresh
+    assert len(members) == 503
+    apple = members["AAPL"]
+    assert (apple.name, apple.gics_sector, apple.cik) == (
+        "Apple Inc.",
+        "Information Technology",
+        "0000320193",
+    )
+    assert len({m.gics_sector for m in members.values()}) == 11
+    assert all(m.cik for m in members.values())
+
+    # Next run, still refused: the list is kept, and the stale built-in list is not re-applied.
+    again = await ingest_universe(ctx)
+    assert again.rows == 0
+    assert "kept the stored 503 members (last refreshed never)" in " ".join(again.notes)
+
+    # Wikipedia works again: the live list takes over and the refresh date is recorded.
+    live = many_rows(500)
+    ctx.web = fetcher(lambda _r: httpx.Response(200, text=wiki_page(live)), "web")
+    await ingest_universe(ctx)
+    with ctx.session_factory() as session:
+        assert len(active_members(session, "sp500")) == 500
+        assert get_cursor(session, "universe", "sp500") == {"refreshed_on": "2026-11-13"}
+
+
+def test_built_in_lists_are_complete() -> None:
+    sp500, sp100 = load_snapshot("sp500"), load_snapshot("sp100")
+    assert 480 <= len(sp500) <= 520 and 95 <= len(sp100) <= 105
+    assert len({c.ticker for c in sp500}) == len(sp500)
+    assert {c.ticker for c in sp100} <= {c.ticker for c in sp500} | {"GOOG"}
+    assert all(c.sector for c in sp500 + sp100)
+
+
+def test_wikipedia_contact_is_only_sent_when_the_user_sets_it() -> None:
+    default = web_user_agent(None)
+    assert default.startswith("papertrader/") and "python-httpx/" in default and "@" not in default
+    assert "(me@example.com)" in web_user_agent(" me@example.com ")
 
 
 async def test_sec_identifiers_fill_gaps_for_custom_universe(engine: Engine) -> None:

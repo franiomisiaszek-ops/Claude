@@ -334,6 +334,7 @@ class Settings(BaseSettings):
     finnhub_api_key: SecretStr | None = None
     fred_api_key: SecretStr | None = None
     sec_user_agent: str | None = None
+    wikipedia_contact: str | None = None
 
     database_url: str = "sqlite:///data/papertrader.db"
     papertrader_config: Path = Path("config.yaml")

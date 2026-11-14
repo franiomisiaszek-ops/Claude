@@ -392,10 +392,15 @@ async def refresh_cusip_map(ctx: IngestContext) -> StepStats:
     stats = StepStats()
     with ctx.session_factory() as session:
         wanted = {plain_symbol(t): t for t in session.scalars(select(UniverseMember.ticker))}
+    if not wanted:
+        stats.note("the universe is empty, nothing to match yet")
+        return stats
 
     for name in ftd_file_names(new_york_date(ctx.now())):
         with ctx.session_factory() as session:
-            if get_cursor(session, "sec.ftd", name).get("done"):
+            # A file is only finished for the universe it was matched against: if stocks
+            # were added since, it is read again.
+            if get_cursor(session, "sec.ftd", name).get("universe") == len(wanted):
                 continue
         try:
             content = await ctx.sec.get_bytes(f"{FTD_URL}/{name}")
@@ -417,7 +422,7 @@ async def refresh_cusip_map(ctx: IngestContext) -> StepStats:
                 session, SecurityIdentifier, rows, conflict=("cusip",), update=("ticker",),
                 also_set=("description", "updated_at"),
             )  # fmt: skip
-            set_cursor(session, "sec.ftd", name, {"done": True})
+            set_cursor(session, "sec.ftd", name, {"universe": len(wanted)})
             session.commit()
     return stats
 

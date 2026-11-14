@@ -406,6 +406,23 @@ async def test_cusip_map_keeps_universe_tickers_and_skips_unpublished_files(engi
     assert not any("202610a" in url for url in log)  # a finished file is not downloaded twice
 
 
+async def test_cusip_files_read_against_an_empty_universe_are_read_again(engine: Engine) -> None:
+    """A real first run did this: the stock list failed, the files were fetched, nothing matched."""
+    log: list[str] = []
+    ctx = make_ctx(engine, sec=sec_site({"cnsfails202610a.zip": FTD}, log))
+
+    empty = await refresh_cusip_map(ctx)
+    assert empty.rows == 0 and "universe is empty" in empty.notes[0]
+    assert log == []  # nothing downloaded, nothing marked as finished
+
+    add_members(ctx, ("ACME", "1111", "Industrials"))
+    assert (await refresh_cusip_map(ctx)).rows == 1
+
+    add_members(ctx, ("ACME.B", "1111", "Industrials"))  # the universe grew
+    assert (await refresh_cusip_map(ctx)).rows == 1
+    assert count(ctx, SecurityIdentifier) == 2
+
+
 def test_parse_13f_sums_share_rows_per_cusip_and_ignores_options_and_bonds() -> None:
     holdings = {h.cusip: h for h in parse_13f(INFO_TABLE_XML.format(v1=300, v2=200))}
     assert set(holdings) == {"00000A100", "99999Z109"}

@@ -10,13 +10,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 import httpx
 
-from papertrader.logging_setup import install_url_redaction
+from papertrader.logging_setup import install_url_redaction, redact_url_secrets
 
 log = logging.getLogger(__name__)
 install_url_redaction()
@@ -66,6 +67,18 @@ class RateLimiter:
 def _safe_url(url: httpx.URL | str) -> str:
     parsed = httpx.URL(str(url))
     return str(parsed.copy_with(query=None))
+
+
+_TAG = re.compile(r"<[^>]+>")
+
+
+def _reason(response: httpx.Response) -> str:
+    """A short plain-text excerpt of an error page, so the cause is visible in the summary."""
+    try:
+        text = " ".join(_TAG.sub(" ", response.text[:2000]).split())
+    except Exception:
+        return ""
+    return f" - {redact_url_secrets(text[:160])}" if text else ""
 
 
 class Fetcher:
@@ -123,7 +136,8 @@ class Fetcher:
                     raise NotFoundError(f"{self.name}: 404 for {_safe_url(url)}", status=404)
                 if response.status_code not in RETRY_STATUS:
                     raise FetchError(
-                        f"{self.name}: HTTP {response.status_code} for {_safe_url(url)}",
+                        f"{self.name}: HTTP {response.status_code} for {_safe_url(url)}"
+                        f"{_reason(response)}",
                         status=response.status_code,
                     )
                 last_problem = f"HTTP {response.status_code}"

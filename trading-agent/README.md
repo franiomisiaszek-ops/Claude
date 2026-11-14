@@ -146,11 +146,18 @@ mostly because the SEC and Alpaca limit how fast data may be requested. It is sa
 stop and restart. Do the 20-stock test first; the full load is only needed before
 Phase 9.
 
+**If the `universe` step mentions HTTP 403:** Wikipedia refused the request for the
+S&P 500 member list. The program then uses its built-in list (dated 2026-11-13), so
+everything still works; only index changes after that date are missing. To get the live
+list, open `.env`, set `WIKIPEDIA_CONTACT=` to an email address or web page of yours
+(Wikipedia asks automated tools to say who they are) and run the command again. This is
+optional, and nothing personal is sent to Wikipedia unless you set it.
+
 What each step loads:
 
 | Step | Source | Key needed |
 |---|---|---|
-| `universe` | S&P 500 members, sectors (Wikipedia), SEC identifiers | none |
+| `universe` | S&P 500 members, sectors (Wikipedia, or the built-in list), SEC identifiers | none |
 | `cusip_map` | Security codes, needed to read fund holdings (SEC) | `SEC_USER_AGENT` |
 | `bars` | Daily prices, adjusted for splits and dividends (Alpaca) | Alpaca |
 | `news` | News, mapped to tickers (Alpaca) | Alpaca |
@@ -173,6 +180,7 @@ by accident. `papertrader check` shows which keys are present (names only, never
 | `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` | Phase 2 | Alpaca dashboard, **Paper** account. Paper keys start with `PK` |
 | `SEC_USER_AGENT` | Phase 2 | Just your name and email, e.g. `Jane Doe jane@example.com` |
 | `FRED_API_KEY` (optional) | Phase 2 | Free, from the St. Louis Fed |
+| `WIKIPEDIA_CONTACT` (optional) | Phase 2 | Your own email or web page; only if Wikipedia refuses the member list |
 | `FINNHUB_API_KEY` (optional) | Phase 2 | Free tier at finnhub.io |
 | `ANTHROPIC_API_KEY` | Phase 3 | console.anthropic.com |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Phase 6 | Telegram's @BotFather |

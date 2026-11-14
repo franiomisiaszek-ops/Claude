@@ -42,6 +42,16 @@ class IngestContext:
     now: Callable[[], datetime] = utcnow
 
 
+def web_user_agent(contact: str | None) -> str:
+    """Wikipedia asks automated tools for: name/version (contact) library/version.
+
+    The contact is only sent if the user set WIKIPEDIA_CONTACT; nothing personal is
+    sent by default.
+    """
+    who = contact.strip() if contact else "personal paper-trading research tool"
+    return f"papertrader/{__version__} ({who}) python-httpx/{httpx.__version__}"
+
+
 @asynccontextmanager
 async def open_context(
     config: AppConfig, settings: Settings, session_factory: sessionmaker[Session]
@@ -60,7 +70,9 @@ async def open_context(
             config=config,
             session_factory=session_factory,
             web=Fetcher(
-                client({"User-Agent": f"papertrader/{__version__}"}), name="web", per_second=2
+                client({"User-Agent": web_user_agent(settings.wikipedia_contact)}),
+                name="web",
+                per_second=2,
             ),
         )
         if settings.sec_user_agent:
