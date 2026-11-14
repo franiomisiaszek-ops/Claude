@@ -135,10 +135,15 @@ class BudgetConfig(_Strict):
         return self
 
 
+# The Anthropic SDK refuses a non-streaming request that could run longer than ten
+# minutes; that limit works out at about 21,000 output tokens.
+MAX_OUTPUT_TOKENS = 21_000
+
+
 class AgentSettings(_Strict):
     model: str = "claude-sonnet-5-5"
     effort: Effort = "medium"
-    max_tokens: int = Field(default=16000, ge=256)
+    max_tokens: int = Field(default=16000, ge=256, le=MAX_OUTPUT_TOKENS)
     enabled: bool = True
 
 
@@ -156,6 +161,13 @@ class AgentsConfig(_Strict):
     concurrency: int = Field(default=5, ge=1, le=32)
     # Max tickers each agent may report on per cycle (keeps cost bounded).
     max_reports_per_agent: int = Field(default=5, ge=1)
+    # How far back "fresh" news and filings reach (three days more on a Monday).
+    lookback_hours: int = Field(default=26, ge=1)
+    # Upper limits on what is put in front of one agent, to bound the cost of a call.
+    max_news_items: int = Field(default=250, ge=10)
+    max_tickers_in_context: int = Field(default=40, ge=5)
+    # How many of the other agents' ideas the contrarian tries to knock down.
+    contrarian_targets: int = Field(default=8, ge=1)
     overrides: dict[str, AgentOverride] = Field(default_factory=dict)
 
     @field_validator("overrides")
@@ -196,7 +208,7 @@ class BlendWeights(_Strict):
 class JudgeConfig(_Strict):
     model: str = "claude-opus-5-5"
     effort: Effort = "high"
-    max_tokens: int = Field(default=32000, ge=1024)
+    max_tokens: int = Field(default=20000, ge=1024, le=MAX_OUTPUT_TOKENS)
     confidence_threshold: Fraction = 0.65
     max_trades_per_day: int = Field(default=5, ge=1)
     blend: BlendWeights = BlendWeights()

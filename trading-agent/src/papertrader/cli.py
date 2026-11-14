@@ -90,6 +90,92 @@ def run() -> None:
     run_forever(runtime)
 
 
+@app.command("dry-run")
+def dry_run(
+    date: Annotated[
+        str | None,
+        typer.Option(help="Decide as of this date (YYYY-MM-DD), at the judge's scheduled time."),
+    ] = None,
+    at: Annotated[
+        str | None, typer.Option(help="New York time of day (HH:MM) to decide at, with --date.")
+    ] = None,
+    max_cost: Annotated[
+        float, typer.Option(help="Stop making API calls once this run has spent this many dollars.")
+    ] = 5.0,
+    agents: Annotated[
+        str | None, typer.Option(help="Only these agents, comma-separated, e.g. macro,technicals.")
+    ] = None,
+    estimate_only: Annotated[
+        bool, typer.Option("--estimate-only", help="Show what a run would cost; make no API calls.")
+    ] = False,
+) -> None:
+    """Run the research agents and the judge once and print the full decision.
+
+    Nothing is traded. Only data that was available at the chosen moment is used.
+    """
+    from datetime import date as date_type
+    from datetime import time as time_type
+
+    from anthropic import AsyncAnthropic
+
+    from papertrader.config import KNOWN_AGENTS
+    from papertrader.db.models import CycleKind
+    from papertrader.db.types import utcnow
+    from papertrader.ingest.context import open_context
+    from papertrader.ingest.timeutil import at_new_york
+    from papertrader.llm.client import ClaudeClient, make_anthropic
+    from papertrader.llm.governor import CostGovernor
+    from papertrader.research.cycle import CycleResult, run_cycle
+    from papertrader.research.report import render
+    from papertrader.runtime import bootstrap
+
+    only = _split(agents)
+    if only and (unknown := sorted(set(only) - KNOWN_AGENTS)):
+        raise _fail(
+            f"unknown agent(s) {', '.join(unknown)}. Agents: {', '.join(sorted(KNOWN_AGENTS))}"
+        )
+    try:
+        runtime = bootstrap(migrate=True, log_format="console")
+        if date is None:
+            as_of = utcnow()
+        else:
+            clock = time_type.fromisoformat(at) if at else runtime.config.schedule.score_and_judge
+            as_of = at_new_york(date_type.fromisoformat(date), clock)
+    except (ConfigError, LiveTradingForbiddenError) as exc:
+        raise _fail(str(exc)) from exc
+    except ValueError as exc:
+        raise _fail(f"could not read the date or time: {exc}") from exc
+    if as_of > utcnow():
+        raise _fail("that moment is in the future")
+
+    key = runtime.settings.anthropic_api_key
+    if key is None and not estimate_only:
+        raise _fail(
+            "ANTHROPIC_API_KEY is not set in .env. Add it, or use --estimate-only to see "
+            "what a run would cost without calling Claude."
+        )
+
+    async def go() -> CycleResult:
+        # With --estimate-only no request is ever sent, so a placeholder key is fine.
+        api = make_anthropic(key.get_secret_value()) if key else AsyncAnthropic(api_key="unused")
+        governor = CostGovernor(
+            runtime.session_factory, runtime.config.budget, cycle_cap_usd=max_cost
+        )
+        claude = ClaudeClient(api, runtime.session_factory, runtime.config.budget, governor)
+        async with open_context(runtime.config, runtime.settings, runtime.session_factory) as ctx:
+            return await run_cycle(
+                config=runtime.config, sessions=runtime.session_factory, claude=claude,
+                as_of=as_of, kind=CycleKind.DRY_RUN, only=only, sec=ctx.sec,
+                estimate_only=estimate_only,
+            )  # fmt: skip
+
+    result = asyncio.run(go())
+    typer.echo("")
+    typer.echo(render(result))
+    if result.status == "failed":
+        raise typer.Exit(code=1)
+
+
 def _split(value: str | None) -> list[str] | None:
     return [part.strip() for part in value.split(",") if part.strip()] if value else None
 

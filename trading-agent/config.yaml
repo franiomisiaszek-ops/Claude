@@ -37,6 +37,10 @@ budget:
     claude-opus-5-5:   { input: 4.00, output: 20.00, cache_read: 0.20, cache_write: 5.00 }
     claude-sonnet-5-5: { input: 2.00, output: 10.00, cache_read: 0.10, cache_write: 2.50 }
     claude-haiku-5-5:  { input: 0.10, output: 0.50,  cache_read: 0.01, cache_write: 0.125 }
+    # Not used directly. If Claude's safety filter declines a request, the API may answer
+    # with one of these instead, and the cost must still be counted correctly.
+    claude-opus-5:     { input: 5.00, output: 25.00, cache_read: 0.50, cache_write: 6.25 }
+    claude-opus-4-8:   { input: 5.00, output: 25.00, cache_read: 0.50, cache_write: 6.25 }
 
 # Research agents. `defaults` applies to every agent; `overrides` changes one agent.
 # Agent names: macro, earnings, sec_filings, sector_analyst (runs once per GICS
@@ -49,6 +53,10 @@ agents:
     enabled: true
   concurrency: 5
   max_reports_per_agent: 5
+  lookback_hours: 26           # what counts as "fresh" news (three days more on Mondays)
+  max_news_items: 250          # most headlines shown to one agent
+  max_tickers_in_context: 40   # most stocks shown to one agent
+  contrarian_targets: 8        # how many ideas the contrarian tries to disprove
   overrides: {}
   # Example:
   # overrides:
@@ -58,7 +66,7 @@ agents:
 judge:
   model: claude-opus-5-5
   effort: high
-  max_tokens: 32000
+  max_tokens: 20000
   confidence_threshold: 0.65   # only trades at or above this are executed
   max_trades_per_day: 5
   # final_confidence = judge x 0.5 + calibrated model probability x 0.3 + agent agreement x 0.2

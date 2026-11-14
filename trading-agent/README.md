@@ -23,7 +23,7 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 |---|---|---|
 | 1 | Scaffold: config, database, logging, CI, Docker | **done** |
 | 2 | Data ingestion + historical backfill | **done** (needs your test run, see below) |
-| 3 | Research agents + judge + `dry-run` | not started |
+| 3 | Research agents + judge + `dry-run` | **done** (needs your real-API test, see below) |
 | 4 | Pattern model + backtest report | not started |
 | 5 | Trading engine + risk rules | not started |
 | 6 | Telegram | not started |
@@ -31,9 +31,8 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 | 8 | Dashboard + deployment guide | not started |
 | 9 | Run on paper for 4-8 weeks | not started |
 
-Right now the program can load and refresh all its data (prices, news, SEC filings,
-insider trades, fund holdings, earnings, macro). It does not call Claude or place
-orders yet.
+Right now the program can load and refresh all its data and run the research agents
+and the judge to produce a decision. It does not place orders yet.
 
 ## Decisions in effect
 
@@ -169,6 +168,59 @@ What each step loads:
 | `macro` | Rates, CPI, unemployment, yield curve (FRED) | FRED (optional) |
 | `market_caps` | Market capitalisation (Finnhub) | Finnhub (optional) |
 | `dedupe` | Marks the same news story arriving twice | none |
+
+## Run the research agents (Phase 3)
+
+`dry-run` runs every research agent and the judge once and prints the full decision:
+each agent's reports, what was removed for lacking a source, the judge's ranked trades
+with their confidence, and what the run cost. **Nothing is traded.**
+
+First see what a run would cost, without calling Claude:
+
+```bash
+docker compose run --rm app papertrader dry-run --estimate-only
+```
+
+Then a real run, which needs `ANTHROPIC_API_KEY` in `.env`. `--max-cost` is a hard
+limit in dollars for this one run:
+
+```bash
+docker compose run --rm app papertrader dry-run --max-cost 2
+```
+
+A run on the 20 test stocks costs roughly $1; on the full S&P 500 expect $1.50 to
+$2.50. Every call is logged with its cost and counted against the monthly budget.
+
+Other forms:
+
+```bash
+docker compose run --rm app papertrader dry-run --agents macro,technicals
+```
+
+```bash
+docker compose run --rm app papertrader dry-run --date 2026-11-12
+```
+
+A run with `--date` uses only data that was public at 08:20 New York time on that day.
+It prints a warning, and it is right to: Claude was trained on text that may describe
+what happened afterwards, so **results on past dates are optimistic and prove nothing**.
+Only forward paper trading is a real test.
+
+The agents:
+
+| Agent | Looks at |
+|---|---|
+| `macro` | Rates, yield curve, inflation, jobs, credit spreads; gives sector views |
+| `earnings` | Results just reported and reports due, with the price reaction |
+| `sec_filings` | New 8-K filings (item codes and opening text), new 10-Q/10-K |
+| `sector_analyst` (one per sector, 11) | Stocks in the sector with fresh news, filings or earnings |
+| `news_event` | Fresh headlines, classified by event type |
+| `technicals` | Momentum, RSI, volume spikes, gaps, 52-week levels (numbers, not charts) |
+| `insider_institutional` | Insider buying and selling, changes in fund holdings |
+| `contrarian` | Tries to disprove the other agents' best ideas |
+
+Agents with nothing new to look at are skipped and cost nothing. Each agent's model and
+effort can be changed in `config.yaml` under `agents.overrides`.
 
 ## Your keys
 

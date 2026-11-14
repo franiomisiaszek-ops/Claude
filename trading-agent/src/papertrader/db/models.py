@@ -225,6 +225,7 @@ class Filing(Base):
     url: Mapped[str | None] = mapped_column(Text)
     text_path: Mapped[str | None] = mapped_column(Text)  # extracted text on disk, if downloaded
     primary_document: Mapped[str | None] = mapped_column(Text)
+    text_excerpt: Mapped[str | None] = mapped_column(Text)  # start of the document, plain text
     # For filings whose contents are read in a second step (Form 4, 13F):
     # null = not read yet, "done", "failed" or "skipped".
     detail_status: Mapped[str | None] = mapped_column(String(16), index=True)

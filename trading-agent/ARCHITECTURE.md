@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phases 1-2)
+## What exists today (Phases 1-3)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -36,6 +36,10 @@ database, so steps are independent: one can fail and be re-run without redoing t
 | Dashboard | `dashboard/` | Read-only Streamlit status page |
 | Health check | `healthcheck.py` | Docker marks the app unhealthy if the heartbeat stops |
 | Ingestion | `ingest/` | Loads and refreshes every data source (see below) |
+| Claude access | `llm/` | One client, cost per call, the budget governor |
+| Research agents | `agents/` | Point-in-time snapshot, 8 agent types, citation checks |
+| Judge | `judge/` | Weighs reports, proposes trades; code checks and scores them |
+| Research cycle | `research/` | Runs agents, contrarian and judge; `dry-run` output |
 
 ## Ingestion (Phase 2)
 
@@ -117,6 +121,90 @@ Known limits (also relevant for the Phase 4 backtest):
 - **Parquet** is not used yet. Prices fit comfortably in the database; the Phase 4
   training dataset will be written as Parquet.
 
+## Research agents and judge (Phase 3)
+
+```
+agents/snapshot.py   reads everything as of one moment (the only database access)
+agents/roster.py     turns the snapshot into each agent's context, every item with an id
+llm/client.py        one structured Claude call: budget check, call, cost log
+agents/validate.py   deletes claims without a valid citation
+research/cycle.py    agents in parallel -> contrarian -> judge -> stored decision
+judge/judge.py       builds the judge's context; checks, scores and ranks its trades
+judge/blend.py       the final-confidence formula
+```
+
+**Point in time.** `build_snapshot()` is the single gate: every query filters on
+`available_at <= as_of`. Agents never query the database, so a run "as of" a past moment
+cannot see later news, prices, filings, results or macro revisions. Tests seed data on
+both sides of the decision time and check that only the earlier side reaches a prompt.
+
+**Citations are enforced by code.** Every context item carries an id (`news:123`,
+`px:AAPL`, `filing:45`, `macro:DGS10`...). After Claude answers, `validate.py` deletes any
+claim whose id was not in the context sent, any claim citing an item about a different
+company, and any report left with no evidence. URLs, the agent name and the timestamp
+are filled in by the program, never taken from the model.
+
+**Claude API use** (checked against the SDK docs, `anthropic` 2.8):
+
+- `client.beta.messages.parse(..., output_format=Model)`: structured, validated output.
+- Adaptive thinking; effort per agent from `config.yaml` (medium for agents, high for the judge).
+- The stop reason is read before the content. A refusal, a cut-off answer and every API
+  error become one of four clear exceptions; one failing agent never stops a cycle.
+- Server-side refusal fallback (`fallbacks: "default"`) is on for Opus and Sonnet: if the
+  safety filter declines a request, the API retries it on the model Anthropic recommends.
+  The answering model is recorded and priced at its own rate.
+- The SDK retries rate limits, server errors and network errors (4 retries, backoff).
+- Prompt caching: all research agents share one identical first system block. The first
+  agent of a cycle runs alone and writes it to the cache; the rest read it at a discount.
+  `dry-run` prints how many calls hit the cache.
+- Batches API: not used yet. It is for bulk, non-urgent work and arrives with the Phase 4
+  historical feature extraction.
+
+**Cost governor** (`llm/governor.py`). Before each call it reserves an estimate; after the
+call the real cost is written to `api_usage`. Reservations stop parallel calls from
+jointly overshooting.
+
+| Mode | When | Effect |
+|---|---|---|
+| normal | below 85% of the monthly budget and within today's share | everything as configured |
+| degraded | 85% of the month spent, or today used more than its share | no sector analysts or insider agent; effort one step lower |
+| stopped | monthly budget spent | no API calls; the cycle ends with "no decision", not an error |
+
+Today's share is (budget left this month / weekdays left) x 1.5. A warning flag is raised
+at 70% for the Telegram alert in Phase 6.
+
+**The judge and the final confidence.** The judge sees every surviving report grouped by
+ticker, the contrarian's objections, prices, limits, positions and each agent's
+reliability weight. Code then checks each proposed trade: the ticker must be a universe
+stock with current prices; shorts are refused while disabled; at least one real report
+must support it; the entry must be within 5% of the last close with stop and target on
+the correct sides; size is capped at the per-position limit.
+
+```
+final = 0.5 x judge + 0.3 x model + 0.2 x agreement
+agreement = FOR / (FOR + AGAINST + 0.5 x NEUTRAL + 0.5)
+```
+
+FOR, AGAINST and NEUTRAL are sums of (agent weight x report confidence). The constant 0.5
+is built-in doubt: one agent alone at 0.8 gives 0.62, three give 0.83, and an opposing
+report pulls the figure down. Until the pattern model exists (Phase 4) its term is left
+out and the other two weights are scaled up to sum to 1. Trades at or above the threshold
+(0.65) and within the daily maximum are marked `proposed`; everything else is stored with
+the reason it was not.
+
+Known limits:
+
+- **Training-data leakage.** Claude may know what happened after a past date. Runs on
+  past dates are optimistic; `dry-run` says so each time.
+- **No call transcripts**, so the earnings agent is told not to judge management tone.
+- **8-K text is the opening of the main document only.** Earnings numbers usually sit in
+  an attached press release (exhibit 99.1), which is not read yet.
+- **10-K / 10-Q risk-factor changes are not compared.** Those filings appear as events
+  only.
+- **Agent reliability weights are all 1.0** until the learning loop (Phase 7) has outcomes.
+- **Holidays are not known yet**; "fresh" news reaches back over weekends only. The Alpaca
+  market calendar arrives with the scheduler (Phase 7).
+
 ## Design rules
 
 ### 1. Paper trading only
@@ -191,23 +279,6 @@ uv run alembic revision --autogenerate -m "describe the change"
 Review the generated file in `src/papertrader/db/migrations/versions/`, run the tests, commit both.
 
 ## Planned design for later phases
-
-### Claude API *(planned, Phase 3)*
-
-- Official `anthropic` SDK; every agent returns a Pydantic-validated structured output.
-- Adaptive thinking, effort set per agent in `config.yaml`.
-- Stable system prompts are cached; backfills use the Batches API (half price).
-- **Cost governor**: before each call it checks month-to-date and day-to-date spend from
-  `api_usage`. At 70% of the budget it warns, at 85% it runs fewer agents at lower effort,
-  at 100% it stops calling the API. It degrades; it does not crash.
-
-### Final confidence *(planned, Phase 3)*
-
-```
-final = 0.5 x judge confidence + 0.3 x calibrated model probability + 0.2 x agent agreement
-```
-
-Weights are in `config.yaml` (`judge.blend`). Only trades with `final >= 0.65` are executed.
 
 ### Pattern model and leakage *(planned, Phase 4)*
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -36,6 +37,8 @@ def clean_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterat
     yield
     config_module.get_settings.cache_clear()
     config_module.get_config.cache_clear()
+    # CLI tests point logging at a captured stream that is closed afterwards.
+    logging.getLogger().handlers.clear()
 
 
 def _database_urls() -> list[str]:
