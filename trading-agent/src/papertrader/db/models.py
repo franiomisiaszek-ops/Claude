@@ -198,6 +198,24 @@ class NewsItem(Base):
     )
 
 
+class NewsFeature(Base):
+    """Text features of one news item, extracted by Claude from MASKED text (company
+    names, tickers and dates removed) so the model cannot recognise the event."""
+
+    __tablename__ = "news_features"
+
+    news_id: Mapped[int] = mapped_column(
+        ForeignKey("news_items.id", ondelete="CASCADE"), primary_key=True
+    )
+    version: Mapped[str] = mapped_column(String(32))
+    event_type: Mapped[str] = mapped_column(String(32))
+    sentiment: Mapped[float] = mapped_column(Float)  # -1 very bad for the company .. +1 very good
+    materiality: Mapped[float] = mapped_column(
+        Float
+    )  # 0 noise .. 1 changes the company's prospects
+    created_at: Mapped[datetime] = _created()
+
+
 class NewsTicker(Base):
     __tablename__ = "news_tickers"
 

@@ -20,6 +20,8 @@ db_app = typer.Typer(no_args_is_help=True, help="Database commands.")
 app.add_typer(db_app, name="db")
 ingest_app = typer.Typer(no_args_is_help=True, help="Fetch market data, news, filings and macro.")
 app.add_typer(ingest_app, name="ingest")
+model_app = typer.Typer(no_args_is_help=True, help="The pattern model: train, report, status.")
+app.add_typer(model_app, name="model")
 
 
 def _fail(message: str) -> typer.Exit:
@@ -174,6 +176,87 @@ def dry_run(
     typer.echo(render(result))
     if result.status == "failed":
         raise typer.Exit(code=1)
+
+
+@model_app.command("train")
+def model_train() -> None:
+    """Build the dataset, validate walk-forward, backtest, and write the report.
+
+    The new model only becomes active if it beats the current one on the latest unseen
+    window. Makes no API calls and places no trades.
+    """
+    import shutil
+
+    from papertrader.db.types import utcnow
+    from papertrader.model.pipeline import NotEnoughDataError, run_training
+    from papertrader.model.report import sanity_warnings
+    from papertrader.runtime import bootstrap
+
+    try:
+        runtime = bootstrap(migrate=True, log_format="console")
+    except (ConfigError, LiveTradingForbiddenError) as exc:
+        raise _fail(str(exc)) from exc
+    try:
+        result = run_training(runtime.session_factory, runtime.config, as_of=utcnow(),
+                              data_dir=runtime.settings.data_dir)  # fmt: skip
+    except NotEnoughDataError as exc:
+        raise _fail(str(exc)) from exc
+
+    oos, bt = result.report["oos"], result.report["backtest"]
+    typer.echo(f"\nModel {result.version}: {result.report['promotion']}")
+    typer.echo(
+        f"Rows: {result.report['data']['rows']:,} | out-of-sample rows: {oos.get('rows', 0):,}"
+    )
+    typer.echo(f"Hit rate {oos.get('hit_rate', 0):.1%} (base rate {oos.get('base_rate', 0):.1%}) | "
+               f"daily IC {oos.get('ic_daily')} | Brier {oos.get('brier', 0):.4f} "
+               f"(naive {oos.get('brier_naive', 0):.4f})")  # fmt: skip
+    if bt:
+        typer.echo(f"Backtest: strategy {bt['strategy'].get('total_return', 0):+.1%} vs SPY "
+                   f"{bt['benchmark'].get('total_return', 0):+.1%} vs random picks "
+                   f"{bt['random']['total_return_mean']:+.1%}; beat "
+                   f"{bt['random']['strategy_percentile']:.0%} of random selections")  # fmt: skip
+    for warning in sanity_warnings(result.report):
+        typer.secho("! " + warning.replace("**", ""), fg=typer.colors.YELLOW)
+
+    target = runtime.settings.reports_dir
+    try:  # a copy where it is easy to open; the originals stay with the model files
+        target.mkdir(parents=True, exist_ok=True)
+        for path in (result.markdown_path, result.html_path):
+            shutil.copy(path, target / f"{result.version}_{path.name}")
+        typer.echo(f"\nReport: {target / (result.version + '_backtest_report.html')}")
+    except OSError:
+        typer.echo(f"\nReport: {result.html_path}")
+    typer.echo("Print it here with: papertrader model report")
+
+
+@model_app.command("report")
+def model_report() -> None:
+    """Print the latest backtest report (Markdown)."""
+    from papertrader.config import get_settings
+
+    reports = sorted((get_settings().data_dir / "model").glob("pm-*/backtest_report.md"))
+    if not reports:
+        raise _fail("No report yet. Run `papertrader model train` first.")
+    typer.echo(reports[-1].read_text(encoding="utf-8"))
+
+
+@model_app.command("status")
+def model_status() -> None:
+    """List trained models and show which one is active."""
+    from sqlalchemy import select
+
+    from papertrader.db.models import ModelVersion
+    from papertrader.runtime import bootstrap
+
+    runtime = bootstrap(migrate=True, log_format="console")
+    with runtime.session_factory() as session:
+        versions = session.scalars(select(ModelVersion).order_by(ModelVersion.id)).all()
+        if not versions:
+            typer.echo("No model has been trained yet.")
+        for row in versions:
+            ic = (row.metrics or {}).get("ic_daily")
+            typer.echo(f"{row.version}  {'ACTIVE' if row.is_active else 'inactive':<8}  trained to "
+                       f"{row.trained_to}  daily IC {ic}  {row.notes or ''}")  # fmt: skip
 
 
 def _split(value: str | None) -> list[str] | None:

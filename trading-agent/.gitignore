@@ -3,8 +3,9 @@
 .env.*
 !.env.example
 
-# Local data, databases, model files
+# Local data, databases, model files, generated reports
 data/
+reports/
 *.db
 *.sqlite3
 *.parquet

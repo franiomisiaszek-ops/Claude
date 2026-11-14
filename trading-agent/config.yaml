@@ -93,6 +93,11 @@ pattern_model:
   calibration: isotonic      # isotonic | platt
   transaction_cost_bps: 5
   slippage_bps: 5
+  backtest_threshold: 0.55   # the backtest buys when the model's probability is at least this
+  backtest_top_n: 3          # at most this many new positions per day in the backtest
+  text_model: claude-haiku-5-5   # reads masked historical headlines (Batches API, half price)
+  text_effort: low
+  text_items_per_request: 40
 
 backfill:
   years: 5

@@ -7,7 +7,11 @@ ENV PYTHONUNBUFFERED=1 \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
 
-RUN pip install --no-cache-dir uv==0.11.32
+# libgomp1: needed by LightGBM (the pattern model).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv==0.11.32
 
 WORKDIR /app
 
@@ -21,8 +25,8 @@ RUN uv sync --frozen --no-dev
 
 # Run as an ordinary user, not root.
 RUN useradd --create-home --uid 1000 app \
-    && mkdir -p /app/data \
-    && chown -R app:app /app/data
+    && mkdir -p /app/data /app/reports \
+    && chown -R app:app /app/data /app/reports
 USER app
 
 CMD ["papertrader", "run"]

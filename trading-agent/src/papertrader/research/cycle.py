@@ -49,6 +49,7 @@ from papertrader.llm.client import (
 )
 from papertrader.llm.governor import BudgetStatus, lower_effort
 from papertrader.llm.pricing import estimate_cost
+from papertrader.model.score import score_live
 
 log = logging.getLogger(__name__)
 
@@ -287,6 +288,14 @@ async def run_cycle(
         result.cycle_id = cycle.id
     assert result.cycle_id is not None
     cycle_id = result.cycle_id
+
+    if model_scores is None:
+        # The pattern model's view of today's event stocks (empty until a model is active).
+        with sessions() as session:
+            model_scores = score_live(session, config, as_of, cycle_id)
+            session.commit()
+        if model_scores:
+            result.notes.append(f"Pattern model scored {len(model_scores)} stocks.")
 
     try:
         gate = asyncio.Semaphore(config.agents.concurrency)

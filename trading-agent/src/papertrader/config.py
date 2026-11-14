@@ -252,6 +252,14 @@ class PatternModelConfig(_Strict):
     calibration: Literal["isotonic", "platt"] = "isotonic"
     transaction_cost_bps: float = Field(default=5.0, ge=0)
     slippage_bps: float = Field(default=5.0, ge=0)
+    # The backtest's trading rule: each day buy up to `backtest_top_n` candidates whose
+    # calibrated probability is at least `backtest_threshold`.
+    backtest_threshold: Fraction = 0.55
+    backtest_top_n: int = Field(default=3, ge=1)
+    # Claude model that reads MASKED historical headlines (Batches API, half price).
+    text_model: str = "claude-haiku-5-5"
+    text_effort: Effort = "low"
+    text_items_per_request: int = Field(default=40, ge=1, le=200)
 
     @model_validator(mode="after")
     def _primary_in_horizons(self) -> Self:
@@ -311,7 +319,7 @@ class AppConfig(_Strict):
     ingest: IngestConfig = IngestConfig()
 
     def models_in_use(self) -> set[str]:
-        models = {self.judge.model}
+        models = {self.judge.model, self.pattern_model.text_model}
         for name in KNOWN_AGENTS:
             settings = self.agents.for_agent(name)
             if settings.enabled:
@@ -351,6 +359,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///data/papertrader.db"
     papertrader_config: Path = Path("config.yaml")
     data_dir: Path = Path("data")
+    reports_dir: Path = Path("reports")
     log_level: str = "INFO"
     log_format: Literal["json", "console"] = "json"
 
