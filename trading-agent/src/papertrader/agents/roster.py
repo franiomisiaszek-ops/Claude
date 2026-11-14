@@ -100,10 +100,12 @@ def price_item(snap: Snapshot, ticker: str) -> ContextItem | None:
         parts.append(f"daily volatility (ATR) {ind.atr_pct * 100:.1f}%")
     if ind.above_sma50 is not None:
         parts.append(("above" if ind.above_sma50 else "below") + " its 50-day average")
+    # The benchmark and the sector funds are market-level context: any report may cite
+    # them for comparison. A stock's own price line belongs to that stock only.
+    about = frozenset({ticker}) if member else frozenset()
     return ContextItem(
-        f"px:{ticker}", " | ".join(parts), daily_bar_available_at(ind.last_day),
-        tickers=frozenset({ticker}),
-    )  # fmt: skip
+        f"px:{ticker}", " | ".join(parts), daily_bar_available_at(ind.last_day), tickers=about
+    )
 
 
 def price_items(snap: Snapshot, tickers: Sequence[str]) -> list[ContextItem]:

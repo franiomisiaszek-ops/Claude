@@ -236,6 +236,26 @@ def test_claims_without_a_real_citation_are_deleted() -> None:
 def test_a_source_about_another_company_does_not_count() -> None:
     result = check(report("AAPL", "long", 0.7, "news:2"))  # news:2 is about Microsoft
     assert result.reports == [] and result.dropped_claims == 1 and result.dropped_reports == 1
+    assert result.removed == [
+        "AAPL: claim citing 'news:2' (source is about another company)",
+        "AAPL: report left with no valid evidence",
+    ]
+
+
+def test_the_market_and_sector_funds_can_be_cited_for_any_stock(engine: Engine) -> None:
+    """Found on the first real run: "20 points behind its sector fund" was being deleted."""
+    seed_market(engine)
+    snap = snapshot(engine)
+    pack = build(spec("technicals"), snap, CFG.agents)
+    assert pack is not None
+    output = AgentOutput(reports=[ReportDraft(**report("AAPL", "long", 0.6, "px:SPY", "px:AAPL", "px:MSFT"))],
+                         summary="s")  # fmt: skip
+    result = finalise(agent_name="technicals", sector=None, as_of=AS_OF, output=output, pack=pack,
+                      max_reports=5)  # fmt: skip
+    (kept,) = result.reports
+    # The benchmark is fair comparison; another company's price line is not evidence.
+    assert [e.source_id for e in kept.evidence] == ["px:SPY", "px:AAPL"]
+    assert result.dropped_claims == 1
 
 
 def test_reports_with_no_evidence_or_a_forbidden_ticker_are_deleted() -> None:

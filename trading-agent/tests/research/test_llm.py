@@ -252,12 +252,12 @@ async def test_no_request_is_sent_once_the_budget_is_gone(engine: Engine) -> Non
 async def test_parallel_calls_cannot_jointly_break_a_cap(engine: Engine) -> None:
     fake = FakeClaude()
     fake.delay = 0.01
-    claude = make_claude(engine, fake, cycle_cap=0.12)  # room for about two calls
+    claude = make_claude(engine, fake, cycle_cap=0.06)  # room for about two calls
     results = await asyncio.gather(*(ask(claude) for _ in range(6)), return_exceptions=True)
     refused = [r for r in results if isinstance(r, BudgetExceededError)]
     assert len(fake.calls) + len(refused) == 6
     assert 1 <= len(fake.calls) <= 3 and refused
-    assert claude.governor.cycle_spent <= 0.12
+    assert claude.governor.cycle_spent <= 0.06
 
 
 def test_unknown_model_prices_are_a_config_error() -> None:

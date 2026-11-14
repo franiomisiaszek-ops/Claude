@@ -157,6 +157,8 @@ are filled in by the program, never taken from the model.
 - Prompt caching: all research agents share one identical first system block. The first
   agent of a cycle runs alone and writes it to the cache; the rest read it at a discount.
   `dry-run` prints how many calls hit the cache.
+- Verified against the real API on 2026-11-14: 16 calls, no errors, structured outputs
+  valid, cache read on every agent call after the first.
 - Batches API: not used yet. It is for bulk, non-urgent work and arrives with the Phase 4
   historical feature extraction.
 

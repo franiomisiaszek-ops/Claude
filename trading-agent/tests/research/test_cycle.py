@@ -363,7 +363,7 @@ async def test_a_run_cap_stops_agents_but_keeps_room_for_the_judge(engine: Engin
     fake = FakeClaude()
     busy_market(fake)
     fake.delay = 0.01  # calls overlap, as they do against the real API
-    claude = make_claude(engine, fake, cycle_cap=0.40)  # the judge alone is held at about $0.24
+    claude = make_claude(engine, fake, cycle_cap=0.25)  # the judge alone is held at about $0.16
     result = await run_cycle(
         config=CFG, sessions=make_session_factory(engine), claude=claude, as_of=AS_OF
     )
@@ -371,7 +371,7 @@ async def test_a_run_cap_stops_agents_but_keeps_room_for_the_judge(engine: Engin
     assert "skipped" in statuses.values() and statuses["macro"] == "ok"
     assert any("spending cap" in r.detail for r in result.runs if r.status == "skipped")
     assert statuses["judge"] == "ok"  # the agents could not spend the judge's share
-    assert result.cost_usd <= 0.40
+    assert result.cost_usd <= 0.25
 
 
 async def test_agent_settings_come_from_config(engine: Engine) -> None:

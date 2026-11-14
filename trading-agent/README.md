@@ -23,7 +23,7 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 |---|---|---|
 | 1 | Scaffold: config, database, logging, CI, Docker | **done** |
 | 2 | Data ingestion + historical backfill | **done** (needs your test run, see below) |
-| 3 | Research agents + judge + `dry-run` | **done** (needs your real-API test, see below) |
+| 3 | Research agents + judge + `dry-run` | **done** (real API verified; a run on real prices still to do) |
 | 4 | Pattern model + backtest report | not started |
 | 5 | Trading engine + risk rules | not started |
 | 6 | Telegram | not started |
@@ -188,8 +188,10 @@ limit in dollars for this one run:
 docker compose run --rm app papertrader dry-run --max-cost 2
 ```
 
-A run on the 20 test stocks costs roughly $1; on the full S&P 500 expect $1.50 to
-$2.50. Every call is logged with its cost and counted against the monthly budget.
+Measured on 2026-11-14 against the real API: a full run on the 20 test stocks cost
+about $0.10 (the estimate shown beforehand was $0.35; estimates are deliberately high).
+A run on the full S&P 500 on a busy news day will cost more; it has not been measured
+yet. Every call is logged with its cost and counted against the monthly budget.
 
 Other forms:
 

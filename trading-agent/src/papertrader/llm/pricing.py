@@ -28,10 +28,11 @@ def cost_usd(usage: Usage, model: str, budget: BudgetConfig, *, batch: bool = Fa
     return total * budget.batch_discount if batch else total
 
 
-# Typical output size per effort level, used only to estimate a call before making it.
-# Output includes the model's thinking, which is why the numbers are well above the
-# size of the final answer.
-_EXPECTED_OUTPUT = {"low": 2_000, "medium": 4_500, "high": 9_000, "xhigh": 14_000, "max": 20_000}
+# Output size assumed per effort level when estimating a call before making it. Output
+# includes the model's thinking. Real calls measured on 2026-11-14 used 150-1,200 tokens
+# at medium (agents) and 600-1,200 at high (judge); these figures are two to four times
+# that, so estimates stay on the safe side without being wildly off.
+_EXPECTED_OUTPUT = {"low": 1_200, "medium": 2_500, "high": 5_000, "xhigh": 9_000, "max": 16_000}
 
 
 def estimate_tokens(text: str) -> int:

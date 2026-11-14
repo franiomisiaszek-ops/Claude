@@ -157,6 +157,8 @@ async def _run_agent(
         pack=pack, max_reports=limit,
     )  # fmt: skip
     stored = _store_reports(sessions, cycle_id, result.model, checked.reports)
+    for removal in checked.removed:
+        log.info("removed by the citation check", extra={"agent": spec.label, "what": removal})
     run = AgentRun(
         spec.label, "ok", len(stored), checked.dropped_claims, checked.dropped_reports,
         result.cost_usd, result.output.summary[:300], result.usage.cache_read_input_tokens,

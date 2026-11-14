@@ -6,7 +6,7 @@ without one is dropped. Here that is done by code, not by trusting the model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from papertrader.agents.context import ContextPack, clip
@@ -18,6 +18,7 @@ class Validated:
     reports: list[AgentReport]
     dropped_claims: int = 0
     dropped_reports: int = 0
+    removed: list[str] = field(default_factory=list)  # what was deleted and why, for the log
 
 
 def _clean_id(raw: str) -> str:
@@ -42,6 +43,7 @@ def finalise(
         ticker = draft.ticker.strip().upper()
         if ticker not in pack.allowed_tickers or ticker in seen:
             result.dropped_reports += 1  # outside this agent's remit, or a repeat
+            result.removed.append(f"{ticker}: report not allowed (wrong ticker or a repeat)")
             continue
 
         evidence: list[CitedEvidence] = []
@@ -52,6 +54,14 @@ def finalise(
             # market in general) rather than borrowed from another one.
             if item is None or (item.tickers and ticker not in item.tickers):
                 dropped += 1
+                why = (
+                    "source not in the context"
+                    if item is None
+                    else "source is about another company"
+                )
+                result.removed.append(
+                    f"{ticker}: claim citing '{clip(claim.source_id, 40)}' ({why})"
+                )
                 continue
             evidence.append(
                 CitedEvidence(claim=clip(claim.claim, 400), source_id=item.source_id, url=item.url)
@@ -59,6 +69,7 @@ def finalise(
         result.dropped_claims += dropped
         if not evidence:
             result.dropped_reports += 1  # nothing left to stand on
+            result.removed.append(f"{ticker}: report left with no valid evidence")
             continue
 
         seen.add(ticker)
