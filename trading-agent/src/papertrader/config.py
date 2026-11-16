@@ -241,7 +241,20 @@ class TradingConfig(_Strict):
     order_type: Literal["market", "limit"] = "limit"
     # For limit entries: how far above the last price a buy limit may be placed.
     limit_slippage_pct: Fraction = 0.003
-    time_in_force: Literal["day", "gtc"] = "day"
+    # Bracket orders: the take-profit and stop-loss legs share the entry's time in force.
+    # With "day" they would be cancelled at the close, leaving a multi-day position
+    # unprotected overnight, so "gtc" is the default. Entries still unfilled at the end
+    # of the day are cancelled by the end-of-day reconcile.
+    time_in_force: Literal["day", "gtc"] = "gtc"
+    # Real-time prices on the free Alpaca data plan come from the IEX feed only.
+    live_feed: Literal["iex", "sip", "delayed_sip"] = "iex"
+    # The time stop sells this many minutes before the close of the last horizon day.
+    time_stop_minutes_before_close: int = Field(default=15, ge=5, le=120)
+    # Thesis break: a held stock gets fresh news this negative (-1..1 word-list score).
+    thesis_break_sentiment: float = Field(default=-0.3, ge=-1.0, le=0.0)
+    thesis_review_cooldown_hours: int = Field(default=6, ge=1)
+    # The judge must be at least this sure that the thesis is broken to sell.
+    thesis_exit_confidence: Fraction = 0.6
 
 
 class PatternModelConfig(_Strict):

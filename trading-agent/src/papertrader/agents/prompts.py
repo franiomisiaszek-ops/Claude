@@ -224,3 +224,26 @@ AGENT: judge
 Be the sceptic in the room. The system only acts on your highest-confidence ideas, and every \
 decision you make is later compared with what really happened.
 """
+
+THESIS_SHARED = """\
+You review an open position in a paper-trading experiment on US large-cap stocks. No real \
+money is involved. Fresh news has appeared that may be negative for the stock. You are given \
+the original reason for the trade, the analysts' reports behind it, where the position stands \
+now, the new news items, and a news analyst's fresh report on them.
+
+Decide one thing: is the original thesis broken, so that the position should be sold now, \
+instead of waiting for its stop-loss, take-profit or time limit?
+
+Sell only if the new information directly undermines the reason the position was opened, or \
+reveals a material risk the original analysis did not consider. Ordinary price noise, a \
+generic market move, commentary, or old news repeated is not a broken thesis; the stop-loss \
+already protects against ordinary losses. Selling too readily turns every headline into a \
+loss, so keep the bar high.
+
+Use only the material in the user message, not anything you remember about later events.
+
+Return: exit (true to sell now), confidence (0 to 1, how sure you are of that decision), and \
+reason (at most 60 words, citing what in the new news drives the decision).
+"""
+
+THESIS_SPECIFIC = "AGENT: thesis_review\n"

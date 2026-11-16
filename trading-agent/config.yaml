@@ -82,8 +82,13 @@ risk:
 
 trading:
   order_type: limit          # market | limit (bracket orders either way)
-  limit_slippage_pct: 0.003
-  time_in_force: day
+  limit_slippage_pct: 0.003  # a buy limit is at most 0.3% above the last trade
+  time_in_force: gtc         # keeps stop-loss and take-profit alive overnight
+  live_feed: iex             # real-time prices (the free Alpaca plan allows IEX only)
+  time_stop_minutes_before_close: 15
+  thesis_break_sentiment: -0.3      # fresh news this negative on a held stock triggers a review
+  thesis_review_cooldown_hours: 6   # at most one review per position in this many hours
+  thesis_exit_confidence: 0.6       # the judge must be this sure the thesis is broken to sell
 
 pattern_model:
   horizons_days: [1, 3, 5, 10]

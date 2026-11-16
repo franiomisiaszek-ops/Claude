@@ -57,6 +57,7 @@ class CycleKind(StrEnum):
     THESIS_BREAK = "thesis_break"
     DRY_RUN = "dry_run"
     BACKTEST = "backtest"
+    MANUAL = "manual"  # test orders placed by hand
 
 
 class RunStatus(StrEnum):
@@ -557,6 +558,9 @@ class Trade(Base):
     pnl_pct: Mapped[float | None] = mapped_column(Float)
     benchmark_return_pct: Mapped[float | None] = mapped_column(Float)  # SPY over the same period
     excess_return_pct: Mapped[float | None] = mapped_column(Float)
+    benchmark_entry_price: Mapped[float | None] = mapped_column(Float)  # SPY when the trade opened
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    exit_reason: Mapped[str | None] = mapped_column(Text)
 
     orders: Mapped[list[Order]] = relationship(back_populates="trade")
 

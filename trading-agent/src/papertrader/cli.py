@@ -22,6 +22,10 @@ ingest_app = typer.Typer(no_args_is_help=True, help="Fetch market data, news, fi
 app.add_typer(ingest_app, name="ingest")
 model_app = typer.Typer(no_args_is_help=True, help="The pattern model: train, report, status.")
 app.add_typer(model_app, name="model")
+trade_app = typer.Typer(
+    no_args_is_help=True, help="Paper trading on Alpaca: orders, monitoring, exits."
+)
+app.add_typer(trade_app, name="trade")
 
 
 def _fail(message: str) -> typer.Exit:
@@ -320,6 +324,378 @@ def model_status() -> None:
             ic = (row.metrics or {}).get("ic_daily")
             typer.echo(f"{row.version}  {'ACTIVE' if row.is_active else 'inactive':<8}  trained to "
                        f"{row.trained_to}  daily IC {ic}  {row.notes or ''}")  # fmt: skip
+
+
+# ----------------------------------------------------------------------------- trading
+
+
+def _trading() -> tuple[Any, Any]:
+    """Runtime and trading engine, connected to the Alpaca PAPER account."""
+    from papertrader.runtime import bootstrap
+    from papertrader.trading.broker import AlpacaPaperBroker, BrokerError
+    from papertrader.trading.engine import TradingEngine
+
+    try:
+        runtime = bootstrap(migrate=True, log_format="console")
+    except (ConfigError, LiveTradingForbiddenError) as exc:
+        raise _fail(str(exc)) from exc
+    settings = runtime.settings
+    if not (settings.alpaca_api_key and settings.alpaca_secret_key):
+        raise _fail("ALPACA_API_KEY and ALPACA_SECRET_KEY (paper account) are not set in .env.")
+    try:
+        broker = AlpacaPaperBroker(
+            settings.alpaca_api_key.get_secret_value(), settings.alpaca_secret_key.get_secret_value(),
+            live_feed=runtime.config.trading.live_feed,
+        )  # fmt: skip
+    except (LiveTradingForbiddenError, BrokerError) as exc:
+        raise _fail(str(exc)) from exc
+    return runtime, TradingEngine(runtime.session_factory, broker, runtime.config)
+
+
+def _latest_notification_id(runtime: Any) -> int:
+    from sqlalchemy import func, select
+
+    from papertrader.db.models import Notification
+
+    with runtime.session_factory() as session:
+        return int(session.scalar(select(func.max(Notification.id))) or 0)
+
+
+def _show_notifications(runtime: Any, after: int) -> None:
+    """Messages written to the outbox by this command (sent by Telegram from Phase 6)."""
+    from sqlalchemy import select
+
+    from papertrader.db.models import Notification
+
+    with runtime.session_factory() as session:
+        rows = session.scalars(
+            select(Notification).where(Notification.id > after).order_by(Notification.id)
+        ).all()
+    if rows:
+        typer.echo("\nMessages queued for Telegram:")
+        for row in rows:
+            typer.echo("  " + row.text.replace("\n", "\n  "))
+
+
+def _placements(results: list[Any]) -> None:
+    if not results:
+        typer.echo("No approved trade ideas to place.")
+    for r in results:
+        limit = f" limit {r.limit_price:.2f}" if r.limit_price else ""
+        typer.echo(
+            f"  {r.ticker:<6} {r.status:<10} {f'{r.qty} shares{limit}' if r.qty else ''}  {r.detail}"
+        )
+
+
+@trade_app.command("status")
+def trade_status() -> None:
+    """Account, positions, open orders and whether trading is paused."""
+    from sqlalchemy import select
+
+    from papertrader.db.models import Trade, TradeStatus
+
+    runtime, engine = _trading()
+    account = engine.broker.account()
+    clock = engine.broker.clock()
+    typer.echo(f"Paper account: equity ${account.equity:,.2f}, cash ${account.cash:,.2f}, "
+               f"today {account.day_change_pct:+.2%} ({account.status})")  # fmt: skip
+    typer.echo(f"Market: {'OPEN' if clock.is_open else 'closed'}")
+    paused = engine.paused()
+    typer.echo(f"Trading: {'PAUSED - ' + str(paused.get('reason')) if paused else 'active'}")
+    positions = engine.broker.positions()
+    typer.echo(f"\nPositions ({len(positions)}):")
+    for p in positions:
+        typer.echo(f"  {p.symbol:<6} {p.qty:g} @ {p.avg_entry_price:.2f}, now {p.current_price:.2f} "
+                   f"({p.current_price / p.avg_entry_price - 1:+.2%}), value ${p.market_value:,.2f}")  # fmt: skip
+    orders = engine.broker.open_orders()
+    typer.echo(f"\nOpen orders ({len(orders)}):")
+    for o in orders:
+        price = o.limit_price or o.stop_price
+        typer.echo(f"  {o.symbol:<6} {o.side} {o.qty:g} {o.order_type}{f' {price:.2f}' if price else ''} "
+                   f"({o.status}, {len(o.legs)} legs)")  # fmt: skip
+    with runtime.session_factory() as session:
+        trades = session.scalars(select(Trade).where(Trade.status == TradeStatus.OPEN)).all()
+        typer.echo(f"\nOpen trades in the database ({len(trades)}):")
+        for t in trades:
+            ends = (
+                f", time stop {t.horizon_ends_at:%Y-%m-%d %H:%M} UTC" if t.horizon_ends_at else ""
+            )
+            typer.echo(
+                f"  {t.ticker:<6} {t.qty:g} @ {t.entry_price:.2f}{' [TEST]' if t.is_test else ''}{ends}"
+            )
+
+
+@trade_app.command("place")
+def trade_place(
+    decision: Annotated[
+        int | None, typer.Option(help="Place this decision's ideas (default: today's).")
+    ] = None,
+) -> None:
+    """Place bracket orders for today's approved trade ideas, within the risk limits."""
+    from papertrader.trading.engine import TradingRefused
+
+    runtime, engine = _trading()
+    start = _latest_notification_id(runtime)
+    try:
+        _placements(engine.place_orders(decision))
+    except TradingRefused as exc:
+        raise _fail(f"No orders placed: {exc}.") from exc
+    _show_notifications(runtime, start)
+
+
+@trade_app.command("test-order")
+def trade_test_order(
+    ticker: Annotated[str, typer.Argument(help="Stock to buy, e.g. AAPL.")],
+    qty: Annotated[int, typer.Option(help="Number of shares.")] = 1,
+) -> None:
+    """Buy a few shares with a bracket order (+2% target, -2% stop, sold at today's close).
+
+    For checking the order flow. Marked as a test: it never counts in the statistics.
+    """
+    from papertrader.trading.engine import TradingRefused
+
+    runtime, engine = _trading()
+    start = _latest_notification_id(runtime)
+    try:
+        decision_id, idea_id = engine.create_test_idea(ticker)
+        _placements(engine.place_orders(decision_id, qty_overrides={idea_id: qty}))
+    except TradingRefused as exc:
+        raise _fail(f"No order placed: {exc}.") from exc
+    typer.echo("Check on it with: papertrader trade monitor")
+    _show_notifications(runtime, start)
+
+
+def _thesis_checks(runtime: Any, engine: Any) -> list[str]:
+    """Fetch fresh news for held stocks, then review any with bad news (needs Claude)."""
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from papertrader.db.models import Trade, TradeStatus
+    from papertrader.db.types import utcnow
+    from papertrader.ingest.context import open_context
+    from papertrader.ingest.news import dedupe_news, ingest_alpaca_news
+    from papertrader.llm.client import ClaudeClient, make_anthropic
+    from papertrader.llm.governor import CostGovernor
+    from papertrader.trading.thesis import find_candidates, review
+
+    with runtime.session_factory() as session:
+        open_tickers = select(Trade.ticker).where(Trade.status == TradeStatus.OPEN)
+        held = sorted(set(session.scalars(open_tickers)))
+    if not held:
+        return []
+    key = runtime.settings.anthropic_api_key
+    notes = []
+
+    async def go() -> None:
+        now = utcnow()
+        async with open_context(runtime.config, runtime.settings, runtime.session_factory) as ctx:
+            if ctx.alpaca is not None:
+                await ingest_alpaca_news(ctx, held, start=now - timedelta(days=3))
+                with runtime.session_factory() as session:
+                    dedupe_news(session, since=now - timedelta(days=3),
+                                window_hours=runtime.config.ingest.news_dedupe_window_hours)  # fmt: skip
+                    session.commit()
+        with runtime.session_factory() as session:
+            candidates = find_candidates(session, runtime.config, now)
+        if candidates and key is None:
+            notes.append("bad news on " + ", ".join(c.ticker for c in candidates)
+                         + " but ANTHROPIC_API_KEY is not set, so it was not reviewed")  # fmt: skip
+            return
+        if not candidates:
+            return
+        governor = CostGovernor(runtime.session_factory, runtime.config.budget)
+        claude = ClaudeClient(make_anthropic(key.get_secret_value()), runtime.session_factory,
+                              runtime.config.budget, governor)  # fmt: skip
+        for candidate in candidates:
+            result = await review(
+                candidate, engine=engine, claude=claude, config=runtime.config, now=now
+            )
+            notes.append(f"thesis check {result.ticker}: {result.detail}")
+
+    asyncio.run(go())
+    return notes
+
+
+def _monitor_once(runtime: Any, engine: Any, *, thesis: bool) -> None:
+    report = engine.monitor()
+    line = (f"equity ${report.equity:,.2f} ({report.day_change_pct:+.2%} today) | "
+            f"opened {report.sync.opened or '-'} | closed {report.sync.closed or '-'}")  # fmt: skip
+    if report.time_stops:
+        line += f" | time stops {report.time_stops}"
+    if report.kill_switch:
+        line += " | KILL SWITCH ACTIVE"
+    typer.echo(line)
+    for warning in report.warnings:
+        typer.secho(f"  ! {warning}", fg=typer.colors.YELLOW)
+    if thesis:
+        for note in _thesis_checks(runtime, engine):
+            typer.echo(f"  {note}")
+
+
+@trade_app.command("monitor")
+def trade_monitor(
+    loop: Annotated[bool, typer.Option(help="Keep checking until the market closes.")] = False,
+    interval: Annotated[
+        int | None, typer.Option(help="Minutes between checks (default from config).")
+    ] = None,
+    thesis: Annotated[
+        bool, typer.Option(help="Review held stocks that get bad news (uses Claude).")
+    ] = True,
+) -> None:
+    """Check fills, time stops, the kill switch and bad news on held stocks."""
+    import time
+
+    runtime, engine = _trading()
+    start = _latest_notification_id(runtime)
+    minutes = interval or runtime.config.schedule.monitor_interval_minutes
+    while True:
+        _monitor_once(runtime, engine, thesis=thesis)
+        if not loop or not engine.broker.clock().is_open:
+            break
+        time.sleep(minutes * 60)
+    _show_notifications(runtime, start)
+
+
+@trade_app.command("close")
+def trade_close(
+    ticker: Annotated[str, typer.Argument(help="Stock to sell, e.g. AAPL.")],
+    reason: Annotated[str, typer.Option(help="Why (recorded with the trade).")] = "closed by hand",
+) -> None:
+    """Sell an open position now with a market order (its stop and target are cancelled)."""
+    import time
+
+    from papertrader.db.models import ExitTrigger
+
+    runtime, engine = _trading()
+    start = _latest_notification_id(runtime)
+    typer.echo(engine.exit_ticker(ticker, ExitTrigger.MANUAL, reason))
+    time.sleep(3)
+    report = engine.sync()
+    if report.closed:
+        typer.echo(f"Closed: {', '.join(report.closed)}")
+    elif not engine.broker.clock().is_open:
+        typer.echo("The market is closed: the sale will happen at the next open.")
+    _show_notifications(runtime, start)
+
+
+@trade_app.command("reconcile")
+def trade_reconcile() -> None:
+    """End of day: cancel entries that did not fill, record equity, write the summary."""
+    runtime, engine = _trading()
+    start = _latest_notification_id(runtime)
+    summary = engine.end_of_day()
+    if summary["expired"]:
+        typer.echo(f"Unfilled entries cancelled: {', '.join(summary['expired'])}")
+    _show_notifications(runtime, start)
+
+
+@trade_app.command("pause")
+def trade_pause(reason: Annotated[str, typer.Option(help="Why.")] = "paused by hand") -> None:
+    """Stop placing new orders. Open positions keep their stops and targets."""
+    _runtime, engine = _trading()
+    engine.pause(reason)
+    typer.echo("Trading paused. Resume with: papertrader trade resume")
+
+
+@trade_app.command("resume")
+def trade_resume() -> None:
+    """Allow new orders again (also clears the kill switch)."""
+    _runtime, engine = _trading()
+    engine.resume()
+    typer.echo("Trading resumed.")
+
+
+@trade_app.command("day")
+def trade_day(
+    test_ticker: Annotated[
+        str | None, typer.Option(help="Also buy one test share of this stock.")
+    ] = "SPY",
+    research: Annotated[
+        bool, typer.Option(help="Run the agents and judge first (costs about $1-2).")
+    ] = False,
+    minutes: Annotated[int, typer.Option(help="How long to keep monitoring.")] = 20,
+    interval: Annotated[int, typer.Option(help="Minutes between checks.")] = 2,
+) -> None:
+    """A full trading day, compressed: (research), orders, monitoring, exits, end of day.
+
+    Run it while the US market is open (15:35-22:00 Polish time on most days). The test
+    share is sold again at the end, so the account is left as it was apart from costs.
+    """
+    import time
+
+    from papertrader.db.models import CycleKind, ExitTrigger
+    from papertrader.db.types import utcnow
+    from papertrader.trading.engine import TradingRefused
+
+    runtime, engine = _trading()
+    start = _latest_notification_id(runtime)
+    if not engine.broker.clock().is_open:
+        raise _fail("The market is closed. Run this between 09:35 and 16:00 New York time.")
+
+    if research:
+        from papertrader.ingest.context import open_context
+        from papertrader.llm.client import ClaudeClient, make_anthropic
+        from papertrader.llm.governor import CostGovernor
+        from papertrader.research.cycle import run_cycle
+        from papertrader.research.report import render
+
+        key = runtime.settings.anthropic_api_key
+        if key is None:
+            raise _fail("--research needs ANTHROPIC_API_KEY in .env.")
+
+        async def research_now() -> Any:
+            governor = CostGovernor(
+                runtime.session_factory, runtime.config.budget, cycle_cap_usd=3.0
+            )
+            claude = ClaudeClient(make_anthropic(key.get_secret_value()), runtime.session_factory,
+                                  runtime.config.budget, governor)  # fmt: skip
+            async with open_context(
+                runtime.config, runtime.settings, runtime.session_factory
+            ) as ctx:
+                return await run_cycle(config=runtime.config, sessions=runtime.session_factory, claude=claude,
+                                       as_of=utcnow(), kind=CycleKind.DAILY, sec=ctx.sec)  # fmt: skip
+
+        typer.echo("1. Research (agents and judge)...")
+        typer.echo(render(asyncio.run(research_now())))
+    else:
+        typer.echo("1. Research skipped (add --research to run the agents and judge).")
+
+    typer.echo("\n2. Orders")
+    test_trade_ticker = None
+    try:
+        _placements(engine.place_orders())
+        if test_ticker:
+            decision_id, idea_id = engine.create_test_idea(test_ticker)
+            results = engine.place_orders(decision_id, qty_overrides={idea_id: 1})
+            _placements(results)
+            if any(r.status == "submitted" for r in results):
+                test_trade_ticker = test_ticker.upper()
+    except TradingRefused as exc:
+        raise _fail(f"No orders placed: {exc}.") from exc
+
+    typer.echo(f"\n3. Monitoring every {interval} min for {minutes} min")
+    deadline = time.monotonic() + minutes * 60
+    while True:
+        _monitor_once(runtime, engine, thesis=True)
+        if time.monotonic() >= deadline or not engine.broker.clock().is_open:
+            break
+        time.sleep(interval * 60)
+
+    if test_trade_ticker:
+        typer.echo(f"\n4. Selling the test share of {test_trade_ticker}")
+        typer.echo(
+            "  "
+            + engine.exit_ticker(test_trade_ticker, ExitTrigger.MANUAL, "end of the simulated day")
+        )
+        time.sleep(5)
+        engine.sync()
+
+    typer.echo("\n5. End of day")
+    summary = engine.end_of_day()
+    if summary["expired"]:
+        typer.echo(f"  unfilled entries cancelled: {', '.join(summary['expired'])}")
+    _show_notifications(runtime, start)
 
 
 def _split(value: str | None) -> list[str] | None:
