@@ -202,14 +202,19 @@ def daily_ic(scored: pd.DataFrame, horizon: int, min_names: int = 5) -> float | 
     """Mean of the per-day rank correlation between probability and what happened.
 
     Computed within each day so it measures picking the right stocks, not timing the
-    market. Days with fewer than `min_names` stocks are left out.
+    market. Days with fewer than `min_names` stocks are left out. A day on which the
+    model gives every stock the same probability counts as 0: it ranked nothing.
+    Returns None only when no day had enough stocks to measure.
     """
     values = []
     for _day, group in scored.groupby("day"):
-        if len(group) >= min_names and group["prob"].nunique() > 1:
-            rho = spearmanr(group["prob"], group[f"excess_{horizon}d"]).statistic
-            if not np.isnan(rho):
-                values.append(rho)
+        if len(group) < min_names:
+            continue
+        if group["prob"].nunique() <= 1 or group[f"excess_{horizon}d"].nunique() <= 1:
+            values.append(0.0)
+            continue
+        rho = spearmanr(group["prob"], group[f"excess_{horizon}d"]).statistic
+        values.append(0.0 if np.isnan(rho) else float(rho))
     return float(np.mean(values)) if values else None
 
 

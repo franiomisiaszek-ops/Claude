@@ -25,6 +25,7 @@ from papertrader.model.score import score_live
 from papertrader.model.text import lexicon_sentiment, mask_text, name_variants, rule_event_type
 from papertrader.model.train import (
     calibration_table,
+    daily_ic,
     fit,
     metrics,
     walk_forward,
@@ -147,6 +148,17 @@ def test_price_features_use_only_the_past() -> None:
     truncated = price_features(bars[bars["day"] <= bars["day"].unique()[100]], "SPY")
     common = truncated.index
     pd.testing.assert_frame_equal(table.loc[common], truncated)  # later bars change nothing earlier
+
+
+def test_a_model_that_ranks_nothing_has_zero_skill_not_missing_skill() -> None:
+    """Found on the first full S&P 500 run: with no signal, calibration flattened to one
+    probability for every stock and the report wrongly said "too little data"."""
+    days = business_days(date(2025, 1, 2), 30)
+    rows = [{"day": day, "prob": 0.494, "excess_5d": (i % 7) / 100 - 0.03}
+            for day in days for i in range(20)]  # fmt: skip
+    flat = pd.DataFrame(rows)
+    assert daily_ic(flat, 5) == 0.0
+    assert daily_ic(flat.head(3), 5) is None  # genuinely too few stocks on any day
 
 
 def test_walk_forward_never_trains_on_the_future_and_leaves_a_gap() -> None:
