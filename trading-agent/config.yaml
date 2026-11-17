@@ -107,6 +107,15 @@ pattern_model:
 backfill:
   years: 5
 
+# Telegram messages and bot commands (keys in .env).
+telegram:
+  enabled: true
+  max_age_hours: 24          # a message stuck longer than this is dropped, not sent late
+  outbox_interval_seconds: 15
+  poll_timeout_seconds: 25   # how long the bot waits for a command per request
+  max_attempts: 5
+  brief_max_trades: 5
+
 # Data ingestion.
 ingest:
   alpaca_feed: sip           # sip (all exchanges) | iex (one exchange) | delayed_sip

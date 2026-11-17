@@ -765,6 +765,7 @@ class Notification(Base):
     )
     telegram_message_id: Mapped[str | None] = mapped_column(String(32))
     error: Mapped[str | None] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = _created()
     sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 

@@ -26,6 +26,8 @@ trade_app = typer.Typer(
     no_args_is_help=True, help="Paper trading on Alpaca: orders, monitoring, exits."
 )
 app.add_typer(trade_app, name="trade")
+telegram_app = typer.Typer(no_args_is_help=True, help="Telegram messages and the bot.")
+app.add_typer(telegram_app, name="telegram")
 
 
 def _fail(message: str) -> typer.Exit:
@@ -701,6 +703,176 @@ def trade_day(
     if summary["expired"]:
         typer.echo(f"  unfilled entries cancelled: {', '.join(summary['expired'])}")
     _show_notifications(runtime, start)
+
+
+# ----------------------------------------------------------------------------- telegram
+
+
+def _telegram(need_chat: bool = True) -> tuple[Any, Any]:
+    from papertrader.notify.service import make_client
+    from papertrader.runtime import bootstrap
+
+    try:
+        runtime = bootstrap(migrate=True, log_format="console")
+    except (ConfigError, LiveTradingForbiddenError) as exc:
+        raise _fail(str(exc)) from exc
+    if runtime.settings.telegram_bot_token is None:
+        raise _fail("TELEGRAM_BOT_TOKEN is not set in .env. See README, section Telegram.")
+    if need_chat and not runtime.settings.telegram_chat_id:
+        raise _fail(
+            "TELEGRAM_CHAT_ID is not set in .env. Run `papertrader telegram setup` to find it."
+        )
+    return runtime, make_client(runtime.settings)
+
+
+def _flush(runtime: Any, client: Any) -> None:
+    from papertrader.notify.telegram import flush_outbox
+
+    report = flush_outbox(runtime.session_factory, client, str(runtime.settings.telegram_chat_id),
+                          runtime.config.telegram)  # fmt: skip
+    typer.echo(f"Sent {report.sent}, failed {report.failed}, dropped as too old {report.dropped}"
+               + (" (stopped early; the rest goes next time)" if report.waiting else "") + ".")  # fmt: skip
+    if report.setup_problem:
+        raise _fail(f"{report.setup_problem}. Check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env "
+                    "(run `papertrader telegram setup`).")  # fmt: skip
+
+
+@telegram_app.command("setup")
+def telegram_setup() -> None:
+    """Check the bot token and show the chat id to put in TELEGRAM_CHAT_ID."""
+    from papertrader.notify.telegram import TelegramError
+
+    _runtime, client = _telegram(need_chat=False)
+    try:
+        me = client.me()
+        updates = client.updates(None, 0)
+    except TelegramError as exc:
+        raise _fail(f"{exc}. Check TELEGRAM_BOT_TOKEN.") from exc
+    typer.echo(f"Bot: @{me.get('username')} ({me.get('first_name')}) - the token works.")
+    chats = {}
+    for update in updates:
+        chat = (update.get("message") or {}).get("chat") or {}
+        if chat.get("id") is not None:
+            chats[str(chat["id"])] = chat.get("first_name") or chat.get("title") or ""
+    if not chats:
+        typer.echo(f"No messages yet. In Telegram, open @{me.get('username')}, press Start or send 'hi', "
+                   "then run this command again.")  # fmt: skip
+        return
+    for chat_id, name in chats.items():
+        typer.echo(f"Chat {name}: TELEGRAM_CHAT_ID={chat_id}")
+    typer.echo("Put that line in .env, then restart the app: docker compose up -d")
+
+
+@telegram_app.command("test")
+def telegram_test() -> None:
+    """Send one sample message of every type, marked [TEST]."""
+    from datetime import timedelta
+
+    from papertrader.db.types import utcnow
+    from papertrader.ingest.timeutil import new_york_date
+    from papertrader.notify import messages
+    from papertrader.notify.reports import BriefTrade, format_brief, format_weekly
+    from papertrader.notify.telegram import TelegramError
+
+    runtime, client = _telegram()
+    now = utcnow()
+    samples = {
+        "Morning brief": format_brief(new_york_date(now), "Sample: rates steady, tech leading, earnings season quiet.", [
+            BriefTrade(1, "buy", "NVDA", 0.82, 141.0, 142.5, 150.6, 137.8, "Strong data-centre demand. More text.", "proposed"),
+            BriefTrade(2, "buy", "JPM", 0.61, 149.0, 150.5, 159.0, 145.5, "Loan growth picking up.", "below_threshold"),
+        ], ["AAPL +1.2%"]),
+        "Trade executed": messages.trade_executed(side="buy", qty=20, ticker="NVDA", price=142.10, confidence=0.82,
+                                                  reason="Strong data-centre demand"),
+        "Sell signal": messages.sell_signal(ticker="NVDA", trigger="target", reason="take-profit at 150.60 filled"),
+        "Trade closed": messages.trade_closed(ticker="NVDA", exit_price=150.60, pnl_usd=170.0, pnl_pct=0.0598,
+                                              excess_pct=0.049, opened=now - timedelta(days=3), closed=now,
+                                              trigger="target", right=["earnings", "technicals"], wrong=["contrarian"]),
+        "End of day": messages.eod_summary(day=now, equity=100_420.0, day_pnl=320.0, day_pnl_pct=0.0032,
+                                           total_pct=0.0042, spy_total_pct=0.0031, win_rate=0.6, closed_trades=5,
+                                           positions=[("AAPL", 9_800.0, 0.012)]),
+        "Weekly": format_weekly(end=new_york_date(now), closed=5, wins=3, pnl=640.0, excess=0.004,
+                                leaderboard=[("earnings", 12, 0.58), ("technicals", 20, 0.51), ("contrarian", 9, 0.44)],
+                                model_line="pm-20261116 not promoted, daily IC -0.013", spend_week=6.40,
+                                spend_parts={"agents": 4.10, "judge": 2.30}, spend_month=21.70, budget=100.0),
+        "Alert": messages.alert("KILL SWITCH: account down -3.1% today. Trading paused (sample)."),
+    }  # fmt: skip
+    failures = 0
+    for name, text in samples.items():
+        try:
+            client.send(str(runtime.settings.telegram_chat_id), "[TEST] " + text)
+            typer.echo(f"  sent: {name}")
+        except TelegramError as exc:
+            failures += 1
+            typer.secho(f"  FAILED: {name}: {exc}", fg=typer.colors.RED)
+    if failures:
+        raise typer.Exit(code=1)
+    typer.echo("All 7 message types sent. Now try /status and /help in the chat with your bot "
+               "(the app container must be running: docker compose up -d).")  # fmt: skip
+
+
+@telegram_app.command("send")
+def telegram_send() -> None:
+    """Send the messages waiting in the outbox now."""
+    runtime, client = _telegram()
+    _flush(runtime, client)
+
+
+@telegram_app.command("brief")
+def telegram_brief() -> None:
+    """Send today's morning brief now (from today's daily research run)."""
+    from papertrader.db.types import utcnow
+    from papertrader.notify.outbox import queue
+    from papertrader.notify.reports import build_brief
+
+    runtime, client = _telegram()
+    with runtime.session_factory() as session:
+        text = build_brief(session, runtime.config, utcnow())
+        if text is None:
+            raise _fail("No daily research run today, so there is no brief to send.")
+        queue(session, "morning_brief", text)
+        session.commit()
+    _flush(runtime, client)
+
+
+@telegram_app.command("weekly")
+def telegram_weekly() -> None:
+    """Send the weekly summary now."""
+    from papertrader.db.types import utcnow
+    from papertrader.notify.outbox import queue
+    from papertrader.notify.reports import build_weekly
+
+    runtime, client = _telegram()
+    with runtime.session_factory() as session:
+        queue(session, "weekly", build_weekly(session, runtime.config, utcnow()))
+        session.commit()
+    _flush(runtime, client)
+
+
+@telegram_app.command("listen")
+def telegram_listen() -> None:
+    """Answer bot commands and send messages in this window, until Ctrl+C.
+
+    Not needed when the app container is running: it does this all the time.
+    """
+    from papertrader.notify.bot import CommandBot
+    from papertrader.notify.service import make_broker_factory
+    from papertrader.notify.telegram import TelegramError
+
+    runtime, client = _telegram()
+    bot = CommandBot(runtime.session_factory, runtime.config, client, str(runtime.settings.telegram_chat_id),
+                     broker=make_broker_factory(runtime.settings, runtime.config))  # fmt: skip
+    typer.echo("Listening. Send /help to your bot. Ctrl+C to stop.")
+    try:
+        while True:
+            try:
+                answered = bot.poll_once()
+                if answered:
+                    typer.echo(f"answered {answered} command(s)")
+                _flush(runtime, client)
+            except TelegramError as exc:
+                typer.echo(f"Telegram problem: {exc}; retrying")
+    except KeyboardInterrupt:
+        typer.echo("Stopped.")
 
 
 def _split(value: str | None) -> list[str] | None:

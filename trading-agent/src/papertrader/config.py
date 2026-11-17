@@ -319,6 +319,16 @@ class IngestConfig(_Strict):
     managers_13f: tuple[Manager13F, ...] = ()
 
 
+class TelegramConfig(_Strict):
+    enabled: bool = True
+    # Messages that could not be sent within this many hours are dropped, not sent late.
+    max_age_hours: int = Field(default=24, ge=1)
+    outbox_interval_seconds: int = Field(default=15, ge=5)
+    poll_timeout_seconds: int = Field(default=25, ge=1, le=50)
+    max_attempts: int = Field(default=5, ge=1)
+    brief_max_trades: int = Field(default=5, ge=1, le=10)
+
+
 class AppConfig(_Strict):
     universe: UniverseConfig = UniverseConfig()
     schedule: ScheduleConfig = ScheduleConfig()
@@ -330,6 +340,7 @@ class AppConfig(_Strict):
     pattern_model: PatternModelConfig = PatternModelConfig()
     backfill: BackfillConfig = BackfillConfig()
     ingest: IngestConfig = IngestConfig()
+    telegram: TelegramConfig = TelegramConfig()
 
     def models_in_use(self) -> set[str]:
         models = {self.judge.model, self.pattern_model.text_model}

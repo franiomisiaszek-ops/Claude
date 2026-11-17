@@ -31,6 +31,7 @@ from papertrader.db.types import utcnow
 from papertrader.ingest.timeutil import NEW_YORK, new_york_date
 from papertrader.notify import messages
 from papertrader.notify.outbox import queue
+from papertrader.trading import control
 from papertrader.trading.broker import Broker, BrokerError, BrokerOrder, TradingDay
 from papertrader.trading.risk import Book, Proposal, check_entry
 
@@ -115,24 +116,13 @@ class TradingEngine:
     # ------------------------------------------------------------------ pause / resume
 
     def paused(self) -> dict[str, Any] | None:
-        with self.sessions() as session:
-            state = get_state(session, TRADING_PAUSED_KEY)
-        return state if state and state.get("paused") else None
+        return control.paused(self.sessions)
 
     def pause(self, reason: str) -> None:
-        with self.sessions() as session:
-            set_state(
-                session,
-                TRADING_PAUSED_KEY,
-                {"paused": True, "reason": reason, "at": self.now().isoformat()},
-            )
-            session.commit()
+        control.pause(self.sessions, reason, self.now())
 
     def resume(self) -> None:
-        with self.sessions() as session:
-            set_state(session, TRADING_PAUSED_KEY, {"paused": False, "at": self.now().isoformat()})
-            set_state(session, KILL_SWITCH_KEY, {"active": False, "at": self.now().isoformat()})
-            session.commit()
+        control.resume(self.sessions, self.now())
 
     # ------------------------------------------------------------------ helpers
 

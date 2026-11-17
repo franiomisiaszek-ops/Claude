@@ -30,11 +30,13 @@ def _redact(key: str, value: Any) -> Any:
 
 
 _SECRET_IN_URL = re.compile(r"(?i)([?&](?:api_?key|token|secret|key)=)[^&\s\"']+")
+# Telegram puts the bot token in the URL path: /bot123456:ABC-def.../sendMessage
+_TELEGRAM_TOKEN = re.compile(r"/bot\d+:[A-Za-z0-9_-]+")
 
 
 def redact_url_secrets(text: str) -> str:
-    """Mask API keys that some services (FRED) require in the URL itself."""
-    return _SECRET_IN_URL.sub(r"\1***", text)
+    """Mask API keys that some services (FRED, Telegram) put in the URL itself."""
+    return _TELEGRAM_TOKEN.sub("/bot***", _SECRET_IN_URL.sub(r"\1***", text))
 
 
 class _UrlSecretFilter(logging.Filter):
@@ -50,7 +52,7 @@ class _UrlSecretFilter(logging.Filter):
         return True
 
 
-_URL_LOGGERS = ("httpx", "httpcore", "urllib3")
+_URL_LOGGERS = ("httpx", "httpx2", "httpcore", "urllib3")
 
 
 def install_url_redaction() -> None:

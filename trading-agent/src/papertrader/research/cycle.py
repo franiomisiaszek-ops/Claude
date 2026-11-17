@@ -50,6 +50,7 @@ from papertrader.llm.client import (
 from papertrader.llm.governor import BudgetStatus, lower_effort
 from papertrader.llm.pricing import estimate_cost
 from papertrader.model.score import score_live
+from papertrader.notify.alerts import budget_alerts
 
 log = logging.getLogger(__name__)
 
@@ -212,6 +213,10 @@ async def run_cycle(
     result = CycleResult(as_of=as_of, kind=kind.value, status="failed", budget=budget)
     degraded = budget.mode == "degraded"
 
+    if not estimate_only:
+        with sessions() as session:
+            budget_alerts(session, budget, utcnow())
+            session.commit()
     if budget.mode == "stopped" and not estimate_only:
         result.status = "skipped"
         result.notes.append(f"No research today: {budget.reason}.")
