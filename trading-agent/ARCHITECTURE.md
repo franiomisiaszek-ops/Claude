@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phases 1-4)
+## What exists today (Phases 1-5)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -41,6 +41,8 @@ database, so steps are independent: one can fail and be re-run without redoing t
 | Judge | `judge/` | Weighs reports, proposes trades; code checks and scores them |
 | Research cycle | `research/` | Runs agents, contrarian and judge; `dry-run` output |
 | Pattern model | `model/` | Dataset, walk-forward training, calibration, backtest, report, live scores |
+| Trading | `trading/` | Paper broker adapter, risk rules, orders, fills, exits, kill switch |
+| Notifications | `notify/` | Outbox table and message texts |
 
 ## Ingestion (Phase 2)
 
@@ -290,6 +292,80 @@ Known limits:
   mostly empty in history.
 - **The backtest rule is simpler than the live system**: no sector limit, no judge, no
   agents. It tests the model alone.
+
+## Trading engine (Phase 5)
+
+```
+trading/broker.py   the Broker interface and the alpaca-py adapter (paper only)
+trading/risk.py     limits for new positions (pure functions)
+trading/engine.py   orders -> fills -> trades -> exits; kill switch; reconcile
+trading/thesis.py   bad news on a held stock -> news agent + judge -> keep or sell
+notify/outbox.py    every message is queued in the database first
+notify/messages.py  message texts
+```
+
+**Paper only, three times over.** `assert_paper_only()` runs before the client exists;
+the client is created with `paper=True`; and the URL the client actually ended up with is
+checked again. A test makes the SDK pretend to pick the live host and expects a refusal.
+
+**Orders.** Each approved idea becomes one bracket order: a limit buy (at most 0.3% above
+the last trade and never above the judge's entry zone) with a take-profit limit and a
+stop-loss stop attached. Time in force is GTC, because Alpaca gives the two exit legs the
+entry's time in force and "day" would cancel the protection at the close. Unfilled entries
+are cancelled by the end-of-day reconcile. The client order id is derived from the idea
+(`pt-i<idea>-entry`), so a repeated run cannot place a second order.
+
+**Risk checks** run on the whole list in rank order, counting orders placed earlier in the
+same run: no second position in a stock; at most 10 positions; size = the judge's
+suggestion capped at 10% of equity; sector exposure (held + ordered) capped at 30%; only
+cash not already committed (no leverage); price must still be inside the entry zone and
+above the stop; target and stop must be at least 0.2% away; shorts refused while disabled.
+A refused idea is stored with its reason.
+
+**From fills to trades.** `sync()` refreshes every unfinished order (parents with their
+legs). An entry fill opens a `Trade` with the SPY price at that moment and the time stop:
+15 minutes before the close of the horizon's last trading day, counting the entry day as
+day one and using Alpaca's calendar (holidays and half days included). A take-profit or
+stop-loss fill closes it as `target` or `stop`; an exit order fill closes it with the
+trigger recorded when the exit was placed. P&L, SPY's move and the excess return are stored,
+and the trade-closed message names which agents were right (supporters if the trade beat
+SPY, opposers if not). Fills already final when first recorded are processed too.
+
+**Exits Alpaca cannot know about.** Time stop, thesis break, manual close: the open legs
+are cancelled, then a market order is sent (retried briefly, because right after a cancel
+the shares can still be held). If it keeps failing an alert is queued.
+
+**Thesis break.** The monitor fetches fresh news for held stocks. A story about a held
+stock since entry (or the last review) with a clearly negative word-list score starts a
+review: the news agent writes a fresh report on the new items, then the judge sees the
+original rationale, the reports behind the trade, the position and that report, and
+answers sell/keep with a confidence. Only "sell" at 60% or more exits. Each position is
+reviewed at most once per 6 hours. A failed review never sells.
+
+**Kill switch.** Day change = equity / previous close equity - 1. At -3%: trading is paused,
+our unfilled entries are cancelled, open positions keep their stops, one alert is queued.
+It stays paused until resumed by hand.
+
+**Reconcile.** Each monitor pass compares Alpaca's positions with open trades and raises
+one alert per day for a position the system does not manage, or a trade with no position.
+Every pass records an equity snapshot; the end-of-day reconcile records the closing one
+and writes the summary: day P&L, P&L since start against SPY, win rate (test trades
+excluded), open positions.
+
+**Outbox.** The engine never talks to Telegram. It writes `notifications` rows with a dedup
+key (one message per event, however often a step runs). Phase 6 sends them; until then the
+commands print them.
+
+Known limits:
+
+- **Polling, not streaming.** Fills are picked up on the next monitor pass (every 10
+  minutes), so a message can be up to 10 minutes late. Recorded fill times are Alpaca's.
+- **One fill row per order**, with the average price, rather than one per execution.
+- **Real-time prices come from the IEX feed** (the free plan), one exchange only; the limit
+  price is based on it.
+- **Shorts** are coded symmetrically but untested against the paper account, and off.
+- **No scheduler yet**: until Phase 7, orders, monitoring and the reconcile only happen
+  when a command is run. Bracket stops and targets work regardless.
 
 ## Design rules
 

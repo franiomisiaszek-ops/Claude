@@ -25,14 +25,15 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 | 2 | Data ingestion + historical backfill | **done** (needs your test run, see below) |
 | 3 | Research agents + judge + `dry-run` | **done** (real API verified; a run on real prices still to do) |
 | 4 | Pattern model + backtest report | **done** (trained on synthetic data only so far, see below) |
-| 5 | Trading engine + risk rules | not started |
+| 5 | Trading engine + risk rules | **done** (needs your test on the paper account, see below) |
 | 6 | Telegram | not started |
 | 7 | Learning loop + scheduler | not started |
 | 8 | Dashboard + deployment guide | not started |
 | 9 | Run on paper for 4-8 weeks | not started |
 
-Right now the program can load and refresh all its data and run the research agents
-and the judge to produce a decision. It does not place orders yet.
+Right now the program can load and refresh all its data, run the research agents and the
+judge, and trade their decisions on the Alpaca paper account. Telegram messages and the
+automatic daily schedule come next.
 
 ## Decisions in effect
 
@@ -277,6 +278,81 @@ docker compose run --rm app papertrader model text-collect
 Run the second command later (usually within the hour), then train again. Masking
 reduces the leak but cannot remove it; the report says how many rows used these features.
 
+## Paper trading (Phase 5)
+
+Every position is opened with a **bracket order**: the buy plus a take-profit and a
+stop-loss that sit at Alpaca. They trigger even when this program is not running.
+The program adds the exits Alpaca cannot know about: selling when the planned holding
+period ends, when bad news breaks the reason for the trade, or when you close by hand.
+
+Run these while the US market is open: 09:35-16:00 New York time, which is usually
+15:35-22:00 in Poland (for a week or two in spring and autumn the clocks change on
+different dates and it is one hour earlier).
+
+**The acceptance test: a compressed trading day.** It buys one share of SPY, watches
+it for 20 minutes, sells it again, and writes the end-of-day summary:
+
+```bash
+docker compose run --rm app papertrader trade day
+```
+
+Add `--research` to run the agents and judge first and trade whatever they approve
+(costs about $1-2 in API fees). `--minutes` and `--interval` change how long and how
+often it checks.
+
+Everyday commands:
+
+```bash
+docker compose run --rm app papertrader trade status
+```
+
+```bash
+docker compose run --rm app papertrader trade place
+```
+
+```bash
+docker compose run --rm app papertrader trade monitor
+```
+
+```bash
+docker compose run --rm app papertrader trade close AAPL
+```
+
+```bash
+docker compose run --rm app papertrader trade reconcile
+```
+
+```bash
+docker compose run --rm app papertrader trade test-order AAPL
+```
+
+```bash
+docker compose run --rm app papertrader trade pause
+```
+
+```bash
+docker compose run --rm app papertrader trade resume
+```
+
+- `status`: equity, positions, open orders, whether trading is paused.
+- `place`: places today's approved trades (from a `daily` research run; `dry-run`
+  decisions are never traded).
+- `monitor`: records fills, sells positions whose time is up, checks the daily loss
+  limit and reviews held stocks that get bad news. `--loop` repeats until the close.
+- `close`: sells one position now.
+- `reconcile`: end of day; cancels buy orders that did not fill.
+- `test-order`: buys one share with a +2% target and a -2% stop, sold at the close.
+  Test trades are marked and never count in the statistics.
+- `pause` / `resume`: stop or allow new orders. Open positions keep their stops.
+
+Until Phase 6 the messages that will go to Telegram are printed instead.
+
+**Risk limits** (all in `config.yaml`): at most 10% of the account per position, 10
+positions, 30% per sector; no leverage (only uncommitted cash is used), no options,
+no shorts. **Kill switch**: if the account is down 3% on the day, trading pauses,
+unfilled buy orders are cancelled, open positions keep their stop-losses, and it stays
+paused until you resume it.
+
 ## Your keys
 
 Keys go in `.env`, never anywhere else. `.env` is ignored by git, so it cannot be committed
@@ -346,7 +422,9 @@ src/papertrader/
   db/                  tables, migrations, sessions
   scheduler/           the long-running service (heartbeat only, for now)
   dashboard/           Streamlit status page
-  agents/ judge/ model/ trading/ notify/ learning/   built in later phases
+  trading/             broker adapter (paper only), risk rules, engine, thesis checks
+  notify/              message outbox and texts (Telegram sending in Phase 6)
+  learning/            built in Phase 7
 tests/                 automated tests
 ```
 
