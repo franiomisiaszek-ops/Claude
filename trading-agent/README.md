@@ -26,14 +26,14 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 | 3 | Research agents + judge + `dry-run` | **done** (real API verified; a run on real prices still to do) |
 | 4 | Pattern model + backtest report | **done** (trained on synthetic data only so far, see below) |
 | 5 | Trading engine + risk rules | **done** (needs your test on the paper account, see below) |
-| 6 | Telegram | not started |
+| 6 | Telegram messages + bot commands | **done** (needs your test, see below) |
 | 7 | Learning loop + scheduler | not started |
 | 8 | Dashboard + deployment guide | not started |
 | 9 | Run on paper for 4-8 weeks | not started |
 
 Right now the program can load and refresh all its data, run the research agents and the
-judge, and trade their decisions on the Alpaca paper account. Telegram messages and the
-automatic daily schedule come next.
+judge, trade their decisions on the Alpaca paper account, and send everything to you on
+Telegram. The automatic daily schedule comes next (Phase 7).
 
 ## Decisions in effect
 
@@ -345,13 +345,92 @@ docker compose run --rm app papertrader trade resume
   Test trades are marked and never count in the statistics.
 - `pause` / `resume`: stop or allow new orders. Open positions keep their stops.
 
-Until Phase 6 the messages that will go to Telegram are printed instead.
+These commands also print the messages they queue for Telegram (see the next section).
 
 **Risk limits** (all in `config.yaml`): at most 10% of the account per position, 10
 positions, 30% per sector; no leverage (only uncommitted cash is used), no options,
 no shorts. **Kill switch**: if the account is down 3% on the day, trading pauses,
 unfilled buy orders are cancelled, open positions keep their stop-losses, and it stays
 paused until you resume it.
+
+## Telegram (Phase 6)
+
+The program sends you messages and answers commands through your own Telegram bot.
+Setting it up takes five minutes and is free.
+
+**1. Create the bot.** In Telegram, open **@BotFather**, send `/newbot`, pick a name and
+a username ending in `bot`. BotFather answers with a token like `123456789:AAE...`.
+Put it in `.env`:
+
+```
+TELEGRAM_BOT_TOKEN=123456789:AAE...
+```
+
+Treat the token like a password: anyone who has it can send messages as your bot.
+
+**2. Find your chat id.** Open your new bot in Telegram and press **Start** (or send
+"hi"). Then run:
+
+```bash
+docker compose run --rm app papertrader telegram setup
+```
+
+It prints a line like `TELEGRAM_CHAT_ID=987654321`. Put that line in `.env` as well.
+The bot only ever answers this chat; messages from anyone else are ignored and you get
+an alert about them.
+
+**3. Restart and test.**
+
+```bash
+docker compose up -d --build
+```
+
+```bash
+docker compose run --rm app papertrader telegram test
+```
+
+You should receive seven messages marked `[TEST]`, one of each type: morning brief,
+trade executed, sell signal, trade closed, end of day, weekly summary, alert. They are
+samples with made-up numbers. Then send `/status` to the bot: the running app container
+answers within a few seconds.
+
+**Bot commands** (only from your chat):
+
+| Command | What it does |
+|---|---|
+| `/status` | Trading active or paused, kill switch, market open, API spend, last research run, heartbeat |
+| `/positions` | Open positions with entry price, current price and gain |
+| `/pnl` | Equity today and since the start, against SPY; closed trades and win rate |
+| `/brief` | Today's morning brief again |
+| `/pause [reason]` | Stop new orders. Open positions keep their stop-loss and take-profit |
+| `/resume` | Allow new orders again (also clears the kill switch) |
+| `/help` | The list above |
+
+A command that reaches the bot more than 15 minutes late (for example because the app
+was off) is not carried out; the bot says so and you can send it again.
+
+**How sending works.** Every message is saved in the database first and sent by the
+app every 15 seconds, in order. If Telegram or your internet is down, messages wait and
+go out later; anything older than 24 hours is dropped instead of arriving late. If the
+token or chat id is wrong, nothing is lost: messages wait until you fix `.env`.
+
+Other commands:
+
+```bash
+docker compose run --rm app papertrader telegram send
+```
+
+```bash
+docker compose run --rm app papertrader telegram brief
+```
+
+```bash
+docker compose run --rm app papertrader telegram weekly
+```
+
+`send` sends waiting messages now, `brief` sends today's morning brief (needs today's
+research run), `weekly` sends the weekly summary. From Phase 7 the brief (08:45), the
+end-of-day summary (16:15) and the weekly summary (Saturday) are sent automatically.
 
 ## Your keys
 
@@ -420,10 +499,10 @@ src/papertrader/
   runtime.py           startup checks
   cli.py               the `papertrader` command
   db/                  tables, migrations, sessions
-  scheduler/           the long-running service (heartbeat only, for now)
+  scheduler/           the long-running service (heartbeat + Telegram, for now)
   dashboard/           Streamlit status page
   trading/             broker adapter (paper only), risk rules, engine, thesis checks
-  notify/              message outbox and texts (Telegram sending in Phase 6)
+  notify/              message outbox, texts, Telegram sender and bot
   learning/            built in Phase 7
 tests/                 automated tests
 ```

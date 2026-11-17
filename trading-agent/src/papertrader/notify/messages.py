@@ -13,6 +13,11 @@ def money(value: float) -> str:
     return f"{sign}${abs(value):,.2f}"
 
 
+def signed_money(value: float) -> str:
+    """For profit and loss: always shows + or -."""
+    return ("+" if value >= 0 else "-") + f"${abs(value):,.2f}"
+
+
 def signed_pct(value: float | None, digits: int = 1) -> str:
     return "n/a" if value is None else f"{value * 100:+.{digits}f}%"
 
@@ -42,7 +47,7 @@ def trade_closed(*, ticker: str, exit_price: float, pnl_usd: float, pnl_pct: flo
     held = f"{days:.1f} days" if days >= 1 else f"{days * 24:.1f} hours"
     lines = [
         f"CLOSED {ticker} @ {money(exit_price)} ({trigger.replace('_', ' ')})",
-        f"P&L {money(pnl_usd)} ({signed_pct(pnl_pct)}), vs SPY {signed_pct(excess_pct)} · held {held}",
+        f"P&L {signed_money(pnl_usd)} ({signed_pct(pnl_pct)}), vs SPY {signed_pct(excess_pct)} · held {held}",
     ]
     if right or wrong:
         lines.append(f"Right: {', '.join(right) or 'none'} · Wrong: {', '.join(wrong) or 'none'}")
@@ -59,7 +64,7 @@ def eod_summary(*, day: datetime, equity: float, day_pnl: float, day_pnl_pct: fl
                 closed_trades: int, positions: Sequence[tuple[str, float, float]]) -> str:  # fmt: skip
     lines = [
         f"End of day {day.astimezone(NEW_YORK):%a %d %b}",
-        f"Day P&L {money(day_pnl)} ({signed_pct(day_pnl_pct, 2)}) · equity {money(equity)}",
+        f"Day P&L {signed_money(day_pnl)} ({signed_pct(day_pnl_pct, 2)}) · equity {money(equity)}",
         f"Since start {signed_pct(total_pct)} vs SPY {signed_pct(spy_total_pct)}",
         f"Win rate {'n/a' if win_rate is None else f'{win_rate:.0%}'} over {closed_trades} closed trade(s)",
     ]

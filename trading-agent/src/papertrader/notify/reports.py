@@ -19,7 +19,7 @@ from papertrader.config import AppConfig
 from papertrader.db import models as m
 from papertrader.db.state import HEARTBEAT_KEY, KILL_SWITCH_KEY, TRADING_PAUSED_KEY, get_state
 from papertrader.ingest.timeutil import NEW_YORK, new_york_date
-from papertrader.notify.messages import money, signed_pct
+from papertrader.notify.messages import money, signed_money, signed_pct
 
 ACTION_WORDS = {"buy": "BUY", "sell_short": "SHORT"}
 NOT_TRADED = {"below_threshold": "below the bar", "rejected_by_risk": "refused by risk rules",
@@ -116,7 +116,7 @@ def format_weekly(*, end: date, closed: int, wins: int, pnl: float, excess: floa
                   leaderboard: Sequence[tuple[str, int, float | None]], model_line: str,
                   spend_week: float, spend_parts: dict[str, float], spend_month: float, budget: float) -> str:  # fmt: skip
     lines = [f"Weekly summary · week to {end:%a %d %b}",
-             f"Trades closed: {closed} · won {wins} · P&L {money(pnl)} · avg vs SPY {signed_pct(excess)}", "",
+             f"Trades closed: {closed} · won {wins} · P&L {signed_money(pnl)} · avg vs SPY {signed_pct(excess)}", "",
              "Agent leaderboard (hit rate, resolved calls):"]  # fmt: skip
     if leaderboard:
         for rank, (agent, n, hit) in enumerate(leaderboard, start=1):
@@ -240,7 +240,7 @@ def build_pnl(
                          f"vs SPY {signed_pct(spy)}")  # fmt: skip
     else:
         lines.append("Account figures unavailable (Alpaca not reachable or no keys)")
-    lines.append(f"Closed trades: {len(closed)} · won {wins} · realised {money(realised)}"
+    lines.append(f"Closed trades: {len(closed)} · won {wins} · realised {signed_money(realised)}"
                  + (f" · win rate {wins / len(closed):.0%}" if closed else ""))  # fmt: skip
     return "\n".join(lines)
 

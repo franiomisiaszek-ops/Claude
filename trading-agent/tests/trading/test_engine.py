@@ -180,7 +180,7 @@ def test_entry_fill_opens_a_trade_and_a_target_fill_closes_it(engine: Engine) ->
     assert trade.excess_return_pct == pytest.approx(150.6 / 142.10 - 1 - 0.01)
     closing = notes(engine)[-1]
     assert closing.startswith("CLOSED NVDA @ $150.60 (target)")
-    assert "P&L $595.00 (+6.0%), vs SPY +5.0% · held 2.0 days" in closing
+    assert "P&L +$595.00 (+6.0%), vs SPY +5.0% · held 2.0 days" in closing
     assert "Right: earnings · Wrong: contrarian" in closing
     fills = rows(engine, m.Fill)
     assert sorted((f.side, f.qty, f.price) for f in fills) == [

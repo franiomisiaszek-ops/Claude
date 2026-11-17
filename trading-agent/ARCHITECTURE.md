@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phases 1-5)
+## What exists today (Phases 1-6)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -32,7 +32,7 @@ database, so steps are independent: one can fail and be re-run without redoing t
 | Migrations | `db/migrations/` | Alembic; runs automatically when the app starts |
 | Startup | `runtime.py` | Guard first, then config, then database |
 | CLI | `cli.py` | `papertrader check`, `db upgrade`, `run`, `version` |
-| Service | `scheduler/service.py` | APScheduler in New York time; only a heartbeat job so far |
+| Service | `scheduler/service.py` | APScheduler in New York time: heartbeat, Telegram sender; starts the bot |
 | Dashboard | `dashboard/` | Read-only Streamlit status page |
 | Health check | `healthcheck.py` | Docker marks the app unhealthy if the heartbeat stops |
 | Ingestion | `ingest/` | Loads and refreshes every data source (see below) |
@@ -42,7 +42,7 @@ database, so steps are independent: one can fail and be re-run without redoing t
 | Research cycle | `research/` | Runs agents, contrarian and judge; `dry-run` output |
 | Pattern model | `model/` | Dataset, walk-forward training, calibration, backtest, report, live scores |
 | Trading | `trading/` | Paper broker adapter, risk rules, orders, fills, exits, kill switch |
-| Notifications | `notify/` | Outbox table and message texts |
+| Notifications | `notify/` | Outbox, message texts, reports, Telegram sender, command bot |
 
 ## Ingestion (Phase 2)
 
@@ -353,8 +353,7 @@ and writes the summary: day P&L, P&L since start against SPY, win rate (test tra
 excluded), open positions.
 
 **Outbox.** The engine never talks to Telegram. It writes `notifications` rows with a dedup
-key (one message per event, however often a step runs). Phase 6 sends them; until then the
-commands print them.
+key (one message per event, however often a step runs). The Telegram sender (below) sends them.
 
 Known limits:
 
@@ -366,6 +365,51 @@ Known limits:
 - **Shorts** are coded symmetrically but untested against the paper account, and off.
 - **No scheduler yet**: until Phase 7, orders, monitoring and the reconcile only happen
   when a command is run. Bracket stops and targets work regardless.
+
+## Telegram (Phase 6)
+
+```
+notify/telegram.py  Bot API client (plain HTTPS) + flush_outbox()
+notify/bot.py       CommandBot: reads commands with long polling, answers them
+notify/reports.py   morning brief, weekly summary, /status, /pnl, /positions texts
+notify/alerts.py    budget alerts, job failed / job missed alerts
+notify/service.py   wiring for the long-running app: sender job + bot thread
+trading/control.py  pause / resume, shared by engine, CLI and bot
+```
+
+**Sending.** `papertrader run` adds an interval job (every `telegram.outbox_interval_seconds`)
+that sends pending `notifications` rows oldest first, as HTML with the first line in bold,
+split at line breaks under Telegram's 4096-character limit.
+
+- A temporary problem (network, rate limit 429, Telegram 5xx) stops the run so the order is
+  kept; the row's `attempts` goes up and after `max_attempts` it is marked failed.
+- A problem with one message (400, e.g. bad text) marks that message failed and goes on.
+- A setup problem (401 wrong token, chat not found, bot blocked) leaves every message pending
+  and logs a warning: nothing is lost while you fix `.env`.
+- Rows older than `max_age_hours` are marked failed ("too old to send") instead of arriving
+  a day late.
+
+**The bot.** A daemon thread long-polls `getUpdates` (`poll_timeout_seconds`), storing the
+update offset in `system_state` so a restart never answers a command twice. Only
+`TELEGRAM_CHAT_ID` is answered; other chats get no reply and raise one alert per chat per
+day. Commands older than 15 minutes are skipped. A failing command answers with its error
+name; polling errors back off from 5 s to 5 minutes and never stop the app. `/positions`
+and `/pnl` ask the paper account (created lazily) and fall back to the database. The bot
+replies directly; everything else goes through the outbox.
+
+**Secrets.** The token is part of every Bot API URL, so the client never puts URLs in its
+errors, and the log filter masks `/bot<token>` in the HTTP libraries' log lines.
+
+**Budget alerts.** Each research run checks the governor and queues: a warning once a month
+at 70%, a "budget-saving mode" alert once a day from 85%, a "budget used up" alert once a
+day at 100%.
+
+Known limits:
+
+- **Brief, end-of-day and weekly are not timed yet.** They are sent when the step that
+  creates them runs (by command); Phase 7 schedules them at 08:45, 16:15 and Saturday.
+- **Long polling, one process.** Running `papertrader telegram listen` while the app container
+  runs makes Telegram refuse one of them ("conflict"); the app just retries later.
 
 ## Design rules
 
