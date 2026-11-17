@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time as time_module
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -89,6 +90,7 @@ class Jobs:
         broker: Callable[[], Broker | None] | None = None,
         anthropic: Callable[[], AsyncAnthropic | None] | None = None,
         now: Callable[[], datetime] = utcnow,
+        sleep: Callable[[float], None] = time_module.sleep,
     ) -> None:
         from papertrader.notify.service import make_broker_factory
 
@@ -98,6 +100,7 @@ class Jobs:
         self._broker = broker or make_broker_factory(runtime.settings, runtime.config)
         self._anthropic = anthropic or self._default_anthropic
         self.now = now
+        self.sleep = sleep
         self.trading_lock = threading.Lock()  # orders, monitor and reconcile never overlap
         self._days: dict[date, TradingDay | None] = {}
 
@@ -132,7 +135,9 @@ class Jobs:
     def _engine(self) -> Any:
         from papertrader.trading.engine import TradingEngine
 
-        return TradingEngine(self.sessions, self.broker(), self.config, now=self.now)
+        return TradingEngine(
+            self.sessions, self.broker(), self.config, now=self.now, sleep=self.sleep
+        )
 
     def trading_day(self, day: date) -> TradingDay | None:
         """Today's market hours from the Alpaca calendar (holidays and half days included).
@@ -142,7 +147,11 @@ class Jobs:
         if day not in self._days:
             try:
                 broker = self._broker()
-                days = broker.calendar(day, day + timedelta(days=10)) if broker else None
+                days = (
+                    broker.calendar(day - timedelta(days=10), day + timedelta(days=10))
+                    if broker
+                    else None
+                )
             except Exception:
                 log.warning("market calendar unavailable; assuming a normal weekday")
                 days = None
@@ -153,11 +162,18 @@ class Jobs:
                     else None
                 )
             else:
-                for item in days:
-                    self._days[item.day] = item
-                if day not in self._days:
-                    self._days[day] = None
+                known = {item.day: item for item in days}
+                for offset in range(-10, 11):  # days the calendar does not list are closed
+                    when = day + timedelta(days=offset)
+                    self._days.setdefault(when, known.get(when))
         return self._days[day]
+
+    def previous_trading_day(self, day: date) -> date | None:
+        for back in range(1, 11):
+            candidate = day - timedelta(days=back)
+            if self.trading_day(candidate) is not None:
+                return candidate
+        return None
 
     # ------------------------------------------------------------------ the runner
 
@@ -286,16 +302,27 @@ class Jobs:
         )
 
     def job_research_agents(self) -> dict[str, Any]:
+        from papertrader.agents.snapshot import fresh_since
         from papertrader.ingest.context import open_context
         from papertrader.research.cycle import CycleResult, run_cycle
 
         claude = self._need_claude()
+        now = self.now()
+        # "Fresh" news reaches back to the previous trading day's run, so nothing published
+        # over a weekend or a market holiday is missed (plus two hours of overlap).
+        fresh_from = fresh_since(now, self.config.agents.lookback_hours)
+        previous = self.previous_trading_day(new_york_date(now))
+        if previous is not None:
+            fresh_from = min(
+                fresh_from,
+                at_new_york(previous, self.config.schedule.research_agents) - timedelta(hours=2),
+            )
 
         async def go() -> CycleResult:
             async with open_context(self.config, self.runtime.settings, self.sessions) as ctx:
                 return await run_cycle(config=self.config, sessions=self.sessions, claude=claude,
-                                       as_of=self.now(), kind=m.CycleKind.DAILY, sec=ctx.sec,
-                                       stage="agents")  # fmt: skip
+                                       as_of=now, kind=m.CycleKind.DAILY, sec=ctx.sec,
+                                       stage="agents", fresh_from=fresh_from)  # fmt: skip
 
         result = asyncio.run(go())
         details = {"cycle_id": result.cycle_id, "reports": len(result.reports),

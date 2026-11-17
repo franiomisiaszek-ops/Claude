@@ -27,13 +27,15 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 | 4 | Pattern model + backtest report | **done** (trained on synthetic data only so far, see below) |
 | 5 | Trading engine + risk rules | **done** (needs your test on the paper account, see below) |
 | 6 | Telegram messages + bot commands | **done** (needs your test, see below) |
-| 7 | Learning loop + scheduler | not started |
+| 7 | Learning loop + scheduler | **done** (runs by itself once the app is up, see below) |
 | 8 | Dashboard + deployment guide | not started |
 | 9 | Run on paper for 4-8 weeks | not started |
 
 Right now the program can load and refresh all its data, run the research agents and the
-judge, trade their decisions on the Alpaca paper account, and send everything to you on
-Telegram. The automatic daily schedule comes next (Phase 7).
+judge, trade their decisions on the Alpaca paper account, send everything to you on
+Telegram, and run all of it by itself every trading day while the app is up. It scores
+its own past calls and learns from them each week. The dashboard and the deployment
+guide come next (Phase 8).
 
 ## Decisions in effect
 
@@ -429,8 +431,86 @@ docker compose run --rm app papertrader telegram weekly
 ```
 
 `send` sends waiting messages now, `brief` sends today's morning brief (needs today's
-research run), `weekly` sends the weekly summary. From Phase 7 the brief (08:45), the
-end-of-day summary (16:15) and the weekly summary (Saturday) are sent automatically.
+research run), `weekly` sends the weekly summary. The app sends the brief (08:45), the
+end-of-day summary (16:15) and the weekly summary (Saturday) by itself.
+
+## The daily schedule and the learning loop (Phase 7)
+
+Once the app is running (`docker compose up -d`), it does everything on its own, on
+trading days only (the Alpaca market calendar knows the holidays and half days):
+
+| New York | Poland* | Job | What happens |
+|---|---|---|---|
+| 06:30 | 12:30 | `ingest` | Overnight news, filings, earnings, macro, prices. New headlines are sent for cheap Claude labels |
+| 07:30 | 13:30 | `research_agents` | The research agents write their reports |
+| 08:20 | 14:20 | `judge` | Pattern-model scores, then the judge decides |
+| 08:45 | 14:45 | `morning_brief` | Telegram morning brief |
+| 09:35 | 15:35 | `place_orders` | Sells what the judge wants out of, then places today's orders |
+| every 10 min | | `monitor` | Fills, time stops, the kill switch, bad news on held stocks |
+| 16:15 | 22:15 | `reconcile_eod` | Cancels unfilled orders, end-of-day summary |
+| 17:00 | 23:00 | `resolve_outcomes` | Scores every agent call whose holding period has ended |
+| Sat 09:00 | Sat 15:00 | `weekly` | New agent weights, model retrain, lessons, weekly summary |
+
+\*Poland is usually 6 hours ahead of New York. For a week or two in spring and autumn
+the clocks change on different dates and it is 5 hours.
+
+**Your computer must be on and awake** at those times, with Docker Desktop running. In
+Windows: Settings > System > Power & sleep > Sleep: "Never" (when plugged in), and in
+Docker Desktop: Settings > General > "Start Docker Desktop when you sign in". The app and
+the database restart by themselves after a reboot. Phase 8 covers this in detail.
+
+**If something does not run, you hear about it.** A job that fails sends an alert. Every
+five minutes a watchdog checks that each of today's jobs ran (15 minutes of grace), and
+that the monitor is running while the market is open. When the app starts after being
+off for a while, it tells you for how long. Missed jobs are not run late by themselves
+(a morning brief at 3 pm would be confusing); run one by hand if you want it:
+
+```bash
+docker compose run --rm app papertrader jobs list
+```
+
+```bash
+docker compose run --rm app papertrader jobs run judge
+```
+
+```bash
+docker compose run --rm app papertrader jobs history
+```
+
+`list` shows the schedule and how each job went today, `run NAME` runs one now (also on a
+weekend or holiday), `history` shows the recent runs with their results.
+
+**How it learns.**
+
+1. **Every evening**, each agent call whose holding period has ended is scored the same way
+   the pattern model's history is: from the open after the call to the close at the end of
+   its horizon, against SPY. A "long" call is right if the stock beat SPY; a "short" call if
+   it lagged. Only live calls count: a `dry-run` on a past date is never scored, because
+   Claude may already know what happened next.
+2. **Accuracy per agent** is kept for the last 30, 90 and 365 days, also per sector and
+   per event type: hit rate, Brier score (how good the confidence figures are) and average
+   excess return.
+3. **Every Saturday** each agent gets a reliability weight:
+   `1 + 4 x (hit rate - 50%) x n / (n + 30)`, between 0.25 and 2.0, from its last 90 days.
+   With fewer than 10 resolved calls it stays 1.0. The `n / (n + 30)` part means a lucky
+   streak of a few calls barely moves an agent. The judge sees these weights, and they set
+   how much each agent counts in the "agent agreement" part of the final confidence.
+4. **The pattern model is retrained** on the newest data and only replaces the active
+   model if it does better on the latest unseen weeks.
+5. **The judge writes "lessons"** from the past four weeks of resolved calls and closed
+   trades (one Claude call, about $0.10-0.30) and reads them before every decision for the
+   next three weeks. Below 10 resolved calls it writes nothing; with few calls it is told to
+   say the evidence is thin.
+
+Expect nothing to be scored in the first week: a 5-day call made on Monday can only be
+scored the following Monday evening. Weights and lessons need a few weeks of calls before
+they mean anything. All the numbers are in `config.yaml` under `learning:`.
+
+**Cost.** A daily run on the full S&P 500 has not been measured yet (the 20-stock test run
+cost about $0.10); the first week will show it, in `/status` and the weekly summary.
+Headline labels cost a few cents a day, the lessons $0.10-0.30 a week. Whatever happens,
+the $100 monthly budget is enforced in code: each day may spend about what is left for
+the month divided by the trading days left, and close to the limit fewer agents run.
 
 ## Your keys
 
@@ -499,11 +579,11 @@ src/papertrader/
   runtime.py           startup checks
   cli.py               the `papertrader` command
   db/                  tables, migrations, sessions
-  scheduler/           the long-running service (heartbeat + Telegram, for now)
+  scheduler/           the long-running service: the schedule, jobs, watchdog
   dashboard/           Streamlit status page
   trading/             broker adapter (paper only), risk rules, engine, thesis checks
   notify/              message outbox, texts, Telegram sender and bot
-  learning/            built in Phase 7
+  learning/            scoring past calls, agent weights, weekly lessons
 tests/                 automated tests
 ```
 

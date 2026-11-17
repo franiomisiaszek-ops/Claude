@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phases 1-6)
+## What exists today (Phases 1-7)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -31,8 +31,10 @@ database, so steps are independent: one can fail and be re-run without redoing t
 | Database schema | `db/models.py` | All 31 tables for every phase |
 | Migrations | `db/migrations/` | Alembic; runs automatically when the app starts |
 | Startup | `runtime.py` | Guard first, then config, then database |
-| CLI | `cli.py` | `papertrader check`, `db upgrade`, `run`, `version` |
-| Service | `scheduler/service.py` | APScheduler in New York time: heartbeat, Telegram sender; starts the bot |
+| CLI | `cli.py` | `papertrader check`, `db`, `run`, `dry-run`, `ingest`, `model`, `trade`, `telegram`, `jobs` |
+| Service | `scheduler/service.py` | APScheduler in New York time: the daily schedule, watchdog, heartbeat, Telegram sender, bot |
+| Jobs | `scheduler/jobs.py` | Every scheduled job, recorded in `job_runs`; alerts on failure; the watchdog |
+| Learning | `learning/` | Scores past agent calls, per-agent accuracy, weights, weekly lessons |
 | Dashboard | `dashboard/` | Read-only Streamlit status page |
 | Health check | `healthcheck.py` | Docker marks the app unhealthy if the heartbeat stops |
 | Ingestion | `ingest/` | Loads and refreshes every data source (see below) |
@@ -205,9 +207,11 @@ Known limits:
   an attached press release (exhibit 99.1), which is not read yet.
 - **10-K / 10-Q risk-factor changes are not compared.** Those filings appear as events
   only.
-- **Agent reliability weights are all 1.0** until the learning loop (Phase 7) has outcomes.
-- **Holidays are not known yet**; "fresh" news reaches back over weekends only. The Alpaca
-  market calendar arrives with the scheduler (Phase 7).
+- **Agent reliability weights start at 1.0** and move only once the learning loop has at
+  least 10 resolved calls per agent (Phase 7).
+- **Holidays**: the scheduled run reaches back to the previous trading day's run (from the
+  Alpaca calendar), so news over a weekend or a holiday is not missed. A `dry-run` still
+  uses the simpler rule (26 hours, three days more on Mondays).
 
 ## Pattern model (Phase 4)
 
@@ -363,8 +367,8 @@ Known limits:
 - **Real-time prices come from the IEX feed** (the free plan), one exchange only; the limit
   price is based on it.
 - **Shorts** are coded symmetrically but untested against the paper account, and off.
-- **No scheduler yet**: until Phase 7, orders, monitoring and the reconcile only happen
-  when a command is run. Bracket stops and targets work regardless.
+- **The app must be running** for time stops, thesis checks and the reconcile. Bracket
+  stops and targets sit at Alpaca and work regardless.
 
 ## Telegram (Phase 6)
 
@@ -406,10 +410,104 @@ day at 100%.
 
 Known limits:
 
-- **Brief, end-of-day and weekly are not timed yet.** They are sent when the step that
-  creates them runs (by command); Phase 7 schedules them at 08:45, 16:15 and Saturday.
 - **Long polling, one process.** Running `papertrader telegram listen` while the app container
   runs makes Telegram refuse one of them ("conflict"); the app just retries later.
+
+## Schedule and learning loop (Phase 7)
+
+```
+scheduler/service.py   APScheduler (New York time): cron triggers from config.yaml
+scheduler/jobs.py      Jobs: one method per job, the runner, the watchdog
+learning/outcomes.py   daily: score agent calls whose horizon has ended
+learning/stats.py      per-agent accuracy, overall / per sector / per event type
+learning/weights.py    weekly: reliability weights for the judge
+learning/lessons.py    weekly: the judge's lessons from resolved outcomes
+```
+
+**The runner.** `Jobs.run(name)` inserts a `job_runs` row (job, scheduled slot, started),
+runs the job and records the result and a summary in `details`. The table's unique
+(job, slot) key means a slot can only run once, even if two copies of the app are running.
+A failure is logged, recorded and queued as a Telegram alert; it never stops the
+scheduler. Trading-day jobs skip themselves on market holidays (recorded as skipped);
+cron fires them Monday to Friday. `papertrader jobs run NAME` uses the same runner with a
+"manual" slot (the time it was run), also on closed days.
+
+**The market calendar** comes from Alpaca (holidays, half-day closes), cached per day,
+21 days at a time. Without Alpaca keys, Monday to Friday 09:30-16:00 is assumed.
+
+**The daily run is two jobs.** `research_agents` (07:30) runs the agents and the
+contrarian and stores their reports; the cycle is left `running` with
+`notes.stage = "agents_done"`. `judge` (08:20) picks up today's waiting cycle, rebuilds the
+same point-in-time snapshot (same `as_of`, same fresh-news window), scores the pattern
+model at 08:20 (its training decision time), and runs the judge with the open positions
+and the latest lessons. A morning with no reports still stores an empty decision, so the
+brief can say "no trades". Dry runs and thesis checks still run everything in one call.
+
+**Orders** (09:35): first the judge's `exits` (held, non-test positions only) are sold with
+a market order recorded as a thesis break; then today's approved ideas are placed. The
+order, monitor and reconcile jobs share one lock, so they never act on the account at the
+same moment. The monitor runs every 10 minutes from 09:35 until Alpaca's close (13:00 on
+half days).
+
+**The watchdog** (every 5 minutes) lists the jobs that should have started today, past
+their time plus `heartbeat_grace_minutes`, and finds those with no `job_runs` row. Each gets
+a `missed` row (so it is reported once) and one alert lists them all. Missed jobs are not
+run late automatically: most only make sense at their time. While the market is open it
+also checks that the monitor ran in the last two intervals plus the grace period (at most
+one alert an hour). At startup the app compares the last heartbeat with the time and
+reports how long it was off.
+
+**Scoring a call** (17:00, after refreshing the day's prices):
+
+    entry  = open of the first trading day whose 08:20 is at or after the call
+    exit   = close `horizon_days` trading days later, counting the entry day
+    excess = stock return - SPY return over the same span
+    hit    = excess > 0 for long, < 0 for short; neutral calls have none
+    brier  = (confidence - hit)^2
+
+This is the pattern model's label rule, so both learn from one yardstick. SPY's bars are
+the calendar. Calls on SPY itself are skipped. Only live cycles count (daily, thesis
+checks, and dry runs started within 36 hours of their `as_of`): a replay of the past is
+contaminated by what Claude already knows. A call whose stock has no price on the entry
+or exit day stays unscored and is dropped after `resolve_max_age_days`.
+
+**Stats** (`agent_stats`) are recomputed from scratch each evening for 30/90/365-day
+windows: per agent overall (`sector = ""`, `event_type = ""`), per GICS sector of the stock
+(the universe table) and per event type. Only directional calls count; the average excess
+return is signed by the call's direction.
+
+**Weights** (Saturday): `1 + scale x (hit rate - 0.5) x n / (n + prior)`, clipped to
+`[weight_min, weight_max]`, from the overall 90-day row; 1.0 below `weight_min_calls`. Each
+weight is a new `agent_weights` row with its basis, effective from that moment, so a
+decision can always be traced to the weights it used. Hit rate rather than Brier drives the
+weight because the judge needs "how often is this agent right"; the Brier score is stored
+with it.
+
+**Lessons** (Saturday): the material is aggregated hit rates (per agent, event type,
+sector, confidence band), the 60 calls with the largest moves, the closed trades with which
+agents were right, and last week's lessons. One structured Claude call (judge model,
+medium effort, `purpose = "lessons"`, counted in the budget) returns a summary and lists of
+what worked, what failed and advice. The rendered text is stored in `lessons` and the judge
+receives the newest one younger than `lessons_max_age_days`.
+
+**Weekly job** steps run independently (one failing does not stop the others): collect
+headline labels, score outcomes, weights, retrain (promotion rules from Phase 4), lessons,
+then the weekly summary with the weight changes, the retrain result and the lessons.
+
+**Headline labels.** The pattern model was trained with Claude's masked headline labels.
+To keep live scoring consistent, the ingest job sends new headlines (up to
+`text_batch_limit` a day, only in normal budget mode) to the Batches API, and the judge,
+the evening job and the weekly job collect finished batches.
+
+Known limits:
+
+- **One process.** Jobs run in the app container's threads. If the computer sleeps, jobs
+  are missed and reported; nothing catches up by itself.
+- **Few outcomes for weeks.** A 5-day call is scored 5 trading days later; weights and
+  lessons need several weeks of calls before they carry information. Small samples are
+  shrunk toward "no track record" on purpose.
+- **Lessons are written by Claude** from the figures given; the prompt forbids outside
+  knowledge, but the text is advice to the judge, not a tested rule.
 
 ## Design rules
 

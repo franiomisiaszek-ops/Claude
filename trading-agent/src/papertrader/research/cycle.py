@@ -91,6 +91,7 @@ class CycleResult:
     notes: list[str] = field(default_factory=list)
     prices_through: date | None = None
     covered: int = 0
+    fresh_from: datetime | None = None  # start of the "fresh news" window, when set by the caller
 
 
 def _settings(config: AppConfig, name: str, degraded: bool) -> AgentSettings:
@@ -204,6 +205,9 @@ def _finish(
             "cost_usd": round(float(before.get("cost_usd", 0.0)) + result.cost_usd, 4),
             "notes": list(before.get("notes", [])) + result.notes,
             "agents": list(before.get("agents", [])) + runs,
+            "fresh_from": result.fresh_from.isoformat()
+            if result.fresh_from
+            else before.get("fresh_from"),
         }
         session.commit()
 
@@ -222,12 +226,14 @@ async def run_cycle(
     model_scores: Mapping[str, float] | None = None,
     lessons: str | None = None,
     stage: Literal["all", "agents"] = "all",
+    fresh_from: datetime | None = None,
 ) -> CycleResult:
     """stage="all" runs everything (dry runs, thesis checks). stage="agents" stops before
     the judge, leaving the cycle waiting for `run_judge_stage` (the daily schedule)."""
     governor = claude.governor
     budget = governor.status()
-    result = CycleResult(as_of=as_of, kind=kind.value, status="failed", budget=budget)
+    result = CycleResult(as_of=as_of, kind=kind.value, status="failed", budget=budget,
+                         fresh_from=fresh_from)  # fmt: skip
     degraded = budget.mode == "degraded"
 
     if not estimate_only:
@@ -243,13 +249,13 @@ async def run_cycle(
 
     # ------------------------------------------------------------------ data
     if sec is not None and not estimate_only:
-        since = fresh_since(as_of, config.agents.lookback_hours)
+        since = fresh_from or fresh_since(as_of, config.agents.lookback_hours)
         try:
             await fetch_filing_excerpts(sec, sessions, since=since, as_of=as_of)
         except Exception as exc:  # optional extra; never block the cycle on it
             result.notes.append(f"Filing texts could not be read ({type(exc).__name__}).")
     with sessions() as session:
-        snap: Snapshot = build_snapshot(session, config, as_of)
+        snap: Snapshot = build_snapshot(session, config, as_of, fresh_from=fresh_from)
         weights = agent_weights(session, as_of)
     result.prices_through = snap.prices_through
     result.covered = len(snap.covered)
@@ -477,7 +483,9 @@ async def run_judge_stage(
         ).all()
         result = CycleResult(as_of=as_of, kind=cycle.kind.value, status="failed", budget=budget,
                              cycle_id=cycle.id, reports=[_report_from_row(r) for r in rows])  # fmt: skip
-        snap: Snapshot = build_snapshot(session, config, as_of)
+        stored_from = (cycle.notes or {}).get("fresh_from")
+        fresh_from = datetime.fromisoformat(stored_from) if stored_from else None
+        snap: Snapshot = build_snapshot(session, config, as_of, fresh_from=fresh_from)
         weights = agent_weights(session, as_of)
         # Scored at the judge's time, the pattern model's decision time (08:20).
         scores = score_live(session, config, now, cycle.id)

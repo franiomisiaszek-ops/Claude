@@ -380,7 +380,9 @@ def _macro(session: Session, config: AppConfig, as_of: datetime) -> list[MacroVi
     return views
 
 
-def build_snapshot(session: Session, config: AppConfig, as_of: datetime) -> Snapshot:
+def build_snapshot(
+    session: Session, config: AppConfig, as_of: datetime, *, fresh_from: datetime | None = None
+) -> Snapshot:
     members = {
         row.ticker: Member(row.ticker, row.name, row.gics_sector, row.market_cap)
         for row in session.scalars(
@@ -390,7 +392,7 @@ def build_snapshot(session: Session, config: AppConfig, as_of: datetime) -> Snap
         )
     }
     price_tickers = [*members, config.universe.benchmark, *SECTOR_ETF.values()]
-    since = fresh_since(as_of, config.agents.lookback_hours)
+    since = fresh_from or fresh_since(as_of, config.agents.lookback_hours)
     return Snapshot(
         as_of=as_of,
         since=since,
