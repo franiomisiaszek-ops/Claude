@@ -116,6 +116,25 @@ telegram:
   max_attempts: 5
   brief_max_trades: 5
 
+# Learning loop: scoring past agent calls, agent weights, weekly lessons.
+learning:
+  resolve_max_age_days: 60       # calls older than this that still cannot be scored are ignored
+  stats_windows_days: [30, 90, 365]
+  # Weight = 1 + scale x (hit rate - 50%) x n / (n + prior_calls), kept between min and max.
+  weight_window_days: 90
+  weight_min_calls: 10           # fewer resolved calls: weight stays 1.0
+  weight_prior_calls: 30
+  weight_scale: 4.0
+  weight_min: 0.25
+  weight_max: 2.0
+  lessons_model: null            # null = the judge's model
+  lessons_effort: medium
+  lessons_max_tokens: 8000
+  lessons_lookback_days: 28
+  lessons_min_outcomes: 10       # fewer resolved calls: no lessons this week
+  lessons_max_age_days: 21       # the judge ignores lessons older than this
+  text_batch_limit: 3000         # new headlines labelled per day (Batches API, half price)
+
 # Data ingestion.
 ingest:
   alpaca_feed: sip           # sip (all exchanges) | iex (one exchange) | delayed_sip

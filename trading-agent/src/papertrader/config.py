@@ -329,6 +329,34 @@ class TelegramConfig(_Strict):
     brief_max_trades: int = Field(default=5, ge=1, le=10)
 
 
+class LearningConfig(_Strict):
+    """How past agent calls are scored and turned into weights and lessons."""
+
+    resolve_max_age_days: int = Field(default=60, ge=10)
+    stats_windows_days: list[int] = [30, 90, 365]
+    weight_window_days: int = 90
+    weight_min_calls: int = Field(default=10, ge=1)
+    weight_prior_calls: int = Field(default=30, ge=0)
+    weight_scale: float = Field(default=4.0, gt=0, le=10)
+    weight_min: float = Field(default=0.25, gt=0, le=1)
+    weight_max: float = Field(default=2.0, ge=1, le=5)
+    lessons_model: str | None = None  # default: the judge's model
+    lessons_effort: Effort = "medium"
+    lessons_max_tokens: int = Field(default=8000, ge=1000)
+    lessons_lookback_days: int = Field(default=28, ge=7)
+    lessons_min_outcomes: int = Field(default=10, ge=1)
+    lessons_max_age_days: int = Field(default=21, ge=7)
+    text_batch_limit: int = Field(default=3000, ge=0)
+
+    @model_validator(mode="after")
+    def _weight_window_is_computed(self) -> Self:
+        if self.weight_window_days not in self.stats_windows_days:
+            raise ValueError(
+                "learning.weight_window_days must be one of learning.stats_windows_days"
+            )
+        return self
+
+
 class AppConfig(_Strict):
     universe: UniverseConfig = UniverseConfig()
     schedule: ScheduleConfig = ScheduleConfig()
@@ -341,6 +369,7 @@ class AppConfig(_Strict):
     backfill: BackfillConfig = BackfillConfig()
     ingest: IngestConfig = IngestConfig()
     telegram: TelegramConfig = TelegramConfig()
+    learning: LearningConfig = LearningConfig()
 
     def models_in_use(self) -> set[str]:
         models = {self.judge.model, self.pattern_model.text_model}

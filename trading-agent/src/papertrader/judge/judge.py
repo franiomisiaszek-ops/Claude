@@ -245,3 +245,22 @@ def store_decision(
         row.ideas.append(idea)
     session.add(row)
     return row
+
+
+def open_positions(session: Session) -> list[str]:
+    """One line per open trade for the judge's context (test trades left out)."""
+    from papertrader.ingest.timeutil import NEW_YORK
+
+    lines = []
+    for trade in session.scalars(
+        select(m.Trade).where(m.Trade.status == m.TradeStatus.OPEN, m.Trade.is_test.is_(False))
+        .order_by(m.Trade.ticker)
+    ):  # fmt: skip
+        side = "long" if trade.direction == m.Direction.LONG else "short"
+        text = f"{trade.ticker}: {side} {trade.qty:g} shares @ {trade.entry_price:.2f} since {trade.entered_at.astimezone(NEW_YORK):%d %b}"
+        if trade.target_price and trade.stop_price:
+            text += f", target {trade.target_price:.2f}, stop {trade.stop_price:.2f}"
+        if trade.horizon_ends_at:
+            text += f", time limit {trade.horizon_ends_at.astimezone(NEW_YORK):%d %b}"
+        lines.append(text)
+    return lines

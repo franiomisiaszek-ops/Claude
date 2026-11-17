@@ -491,25 +491,7 @@ class TradingEngine:
 
     @staticmethod
     def _agents_verdict(session: Session, trade: m.Trade) -> tuple[list[str], list[str]]:
-        """Which agents were right: supporters if the trade beat SPY, opposers if not."""
-        if trade.trade_idea_id is None:
-            return [], []
-        outcome = trade.excess_return_pct if trade.excess_return_pct is not None else trade.pnl_pct
-        rows = session.execute(
-            select(m.AgentReport.agent_name, m.AgentReport.sector, m.TradeIdeaReport.stance)
-            .join(m.TradeIdeaReport, m.TradeIdeaReport.agent_report_id == m.AgentReport.id)
-            .where(m.TradeIdeaReport.trade_idea_id == trade.trade_idea_id)
-        ).all()
-        won = (outcome or 0.0) > 0
-        right: list[str] = []
-        wrong: list[str] = []
-        for name, sector, stance in rows:
-            if stance == m.Stance.NEUTRAL:
-                continue
-            label = f"{name} ({sector})" if sector else name
-            correct = won if stance == m.Stance.SUPPORT else not won
-            (right if correct else wrong).append(label)
-        return sorted(set(right)), sorted(set(wrong))
+        return agents_verdict(session, trade)
 
     # ------------------------------------------------------------------ exits
 
@@ -768,4 +750,33 @@ def _day_start(day: date) -> datetime:
     return datetime.combine(day, time(0), tzinfo=NEW_YORK)
 
 
-__all__ = ["MonitorReport", "Placement", "SyncReport", "TradingEngine", "TradingRefused"]
+__all__ = [
+    "MonitorReport",
+    "Placement",
+    "SyncReport",
+    "TradingEngine",
+    "TradingRefused",
+    "agents_verdict",
+]
+
+
+def agents_verdict(session: Session, trade: m.Trade) -> tuple[list[str], list[str]]:
+    """Which agents were right: supporters if the trade beat SPY, opposers if not."""
+    if trade.trade_idea_id is None:
+        return [], []
+    outcome = trade.excess_return_pct if trade.excess_return_pct is not None else trade.pnl_pct
+    rows = session.execute(
+        select(m.AgentReport.agent_name, m.AgentReport.sector, m.TradeIdeaReport.stance)
+        .join(m.TradeIdeaReport, m.TradeIdeaReport.agent_report_id == m.AgentReport.id)
+        .where(m.TradeIdeaReport.trade_idea_id == trade.trade_idea_id)
+    ).all()
+    won = (outcome or 0.0) > 0
+    right: list[str] = []
+    wrong: list[str] = []
+    for name, sector, stance in rows:
+        if stance == m.Stance.NEUTRAL:
+            continue
+        label = f"{name} ({sector})" if sector else name
+        correct = won if stance == m.Stance.SUPPORT else not won
+        (right if correct else wrong).append(label)
+    return sorted(set(right)), sorted(set(wrong))

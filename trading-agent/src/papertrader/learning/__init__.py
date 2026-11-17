@@ -1,1 +1,1 @@
-"""Learning loop: outcome resolution, agent weights, weekly retrain. Built in Phase 7."""
+"""The learning loop: score past agent calls, re-weight the agents, write lessons."""

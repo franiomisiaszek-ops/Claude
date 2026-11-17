@@ -130,7 +130,7 @@ def format_weekly(*, end: date, closed: int, wins: int, pnl: float, excess: floa
 
 
 def _spend_group(purpose: str) -> str:
-    if purpose in ("judge", "thesis:judge"):
+    if purpose in ("judge", "thesis:judge", "lessons"):
         return "judge"
     if purpose == "text_features":
         return "text labels"

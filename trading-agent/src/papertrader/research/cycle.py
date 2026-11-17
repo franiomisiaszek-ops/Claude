@@ -16,22 +16,24 @@ import asyncio
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
+from typing import Literal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from papertrader.agents import prompts
 from papertrader.agents.context import ContextPack
 from papertrader.agents.roster import CONTRARIAN, AgentSpec, build, build_contrarian, specs
-from papertrader.agents.schemas import AgentOutput, AgentReport
+from papertrader.agents.schemas import AgentOutput, AgentReport, CitedEvidence
 from papertrader.agents.snapshot import Snapshot, build_snapshot, fresh_since
 from papertrader.agents.validate import finalise
-from papertrader.config import AgentSettings, AppConfig
+from papertrader.config import AgentSettings, AppConfig, Effort
 from papertrader.db import models as m
 from papertrader.db.types import utcnow
 from papertrader.ingest.filing_text import fetch_filing_excerpts
 from papertrader.ingest.http import Fetcher
-from papertrader.ingest.timeutil import NEW_YORK
+from papertrader.ingest.timeutil import NEW_YORK, at_new_york, new_york_date
 from papertrader.judge.judge import (
     JUDGE_SYSTEM,
     agent_weights,
@@ -173,24 +175,36 @@ async def _run_agent(
     return run, stored
 
 
-def _finish(sessions: sessionmaker[Session], result: CycleResult, status: m.RunStatus) -> None:
+AGENTS_DONE = "agents_done"  # notes["stage"] of a daily cycle waiting for its judge
+
+
+def _finish(
+    sessions: sessionmaker[Session],
+    result: CycleResult,
+    status: m.RunStatus,
+    *,
+    stage: str = "done",
+) -> None:
     if result.cycle_id is None:
         return
     with sessions() as session:
         cycle = session.get(m.DecisionCycle, result.cycle_id)
         assert cycle is not None
+        before = dict(cycle.notes or {})
         cycle.status = status
-        cycle.finished_at = utcnow()
+        cycle.finished_at = None if status == m.RunStatus.RUNNING else utcnow()
+        runs = [
+            {"agent": r.label, "status": r.status, "reports": r.reports,
+             "dropped_claims": r.dropped_claims, "detail": r.detail[:200]}
+            for r in result.runs
+        ]  # fmt: skip
         cycle.notes = {
+            "stage": stage,
             "budget_mode": result.budget.mode,
-            "cost_usd": round(result.cost_usd, 4),
-            "notes": result.notes,
-            "agents": [
-                {"agent": r.label, "status": r.status, "reports": r.reports,
-                 "dropped_claims": r.dropped_claims, "detail": r.detail[:200]}
-                for r in result.runs
-            ],
-        }  # fmt: skip
+            "cost_usd": round(float(before.get("cost_usd", 0.0)) + result.cost_usd, 4),
+            "notes": list(before.get("notes", [])) + result.notes,
+            "agents": list(before.get("agents", [])) + runs,
+        }
         session.commit()
 
 
@@ -207,7 +221,10 @@ async def run_cycle(
     positions: Sequence[str] = (),
     model_scores: Mapping[str, float] | None = None,
     lessons: str | None = None,
+    stage: Literal["all", "agents"] = "all",
 ) -> CycleResult:
+    """stage="all" runs everything (dry runs, thesis checks). stage="agents" stops before
+    the judge, leaving the cycle waiting for `run_judge_stage` (the daily schedule)."""
     governor = claude.governor
     budget = governor.status()
     result = CycleResult(as_of=as_of, kind=kind.value, status="failed", budget=budget)
@@ -294,7 +311,7 @@ async def run_cycle(
     assert result.cycle_id is not None
     cycle_id = result.cycle_id
 
-    if model_scores is None:
+    if model_scores is None and stage == "all":
         # The pattern model's view of today's event stocks (empty until a model is active).
         with sessions() as session:
             model_scores = score_live(session, config, as_of, cycle_id)
@@ -336,41 +353,15 @@ async def run_cycle(
 
         # ---------------------------------------------------------------- judge
         governor.settle(judge_hold, 0.0)  # release the room that was kept for the judge
-        if not result.reports:
-            result.notes.append("No analyst produced a report, so there was nothing to judge.")
-            result.decision = JudgeDecision(
-                as_of=as_of, market_summary="No analyst produced a report today.", trades=[],
-                exits=[], rejected=[], threshold=config.judge.confidence_threshold,
-            )  # fmt: skip
-        else:
-            scores = dict(model_scores or {})
-            user = render_context(
-                as_of_text=as_of.astimezone(NEW_YORK).strftime("%Y-%m-%d %H:%M New York time"),
-                reports=result.reports, snap=snap, config=config, weights=weights,
-                model_scores=scores, positions=positions, lessons=lessons,
-            )  # fmt: skip
-            try:
-                judged = await claude.structured(
-                    purpose="judge", model=config.judge.model, effort=judge_effort,
-                    max_tokens=config.judge.max_tokens, system=JUDGE_SYSTEM, user=user,
-                    output=JudgeOutput, cycle_id=cycle_id,
-                )  # fmt: skip
-            except (BudgetExceededError, LLMError) as exc:
-                if isinstance(exc, LLMConfigError):
-                    raise
-                result.runs.append(AgentRun("judge", "failed", detail=str(exc)))
-                result.notes.append(f"The judge did not run ({exc}); no trades were proposed.")
-            else:
-                result.decision = decide(
-                    output=judged.output, reports=result.reports, snap=snap, config=config,
-                    weights=weights, model_scores=scores,
-                )  # fmt: skip
-                result.runs.append(
-                    AgentRun("judge", "ok", len(result.decision.trades), cost_usd=judged.cost_usd)
-                )
-                with sessions() as session:
-                    store_decision(session, cycle_id, result.decision, judged.model)
-                    session.commit()
+        if stage == "agents":
+            result.cost_usd = governor.cycle_spent
+            result.status = "succeeded"
+            result.notes.append(f"{len(result.reports)} reports stored; the judge runs next.")
+            _finish(sessions, result, m.RunStatus.RUNNING, stage=AGENTS_DONE)
+            return result
+        await _judge(result, config=config, sessions=sessions, claude=claude, snap=snap,
+                     weights=weights, scores=dict(model_scores or {}), positions=positions,
+                     lessons=lessons, effort=judge_effort)  # fmt: skip
     except LLMConfigError as exc:
         result.notes.append(str(exc))
         result.cost_usd = governor.cycle_spent
@@ -378,6 +369,138 @@ async def run_cycle(
         return result
 
     result.cost_usd = governor.cycle_spent
+    result.status = "succeeded"
+    _finish(sessions, result, m.RunStatus.SUCCEEDED)
+    return result
+
+
+async def _judge(
+    result: CycleResult,
+    *,
+    config: AppConfig,
+    sessions: sessionmaker[Session],
+    claude: ClaudeClient,
+    snap: Snapshot,
+    weights: Mapping[str, float],
+    scores: dict[str, float],
+    positions: Sequence[str],
+    lessons: str | None,
+    effort: Effort,
+) -> None:
+    assert result.cycle_id is not None
+    cycle_id, as_of = result.cycle_id, result.as_of
+    if not result.reports:
+        result.notes.append("No analyst produced a report, so there was nothing to judge.")
+        result.decision = JudgeDecision(
+            as_of=as_of, market_summary="No analyst produced a report today.", trades=[],
+            exits=[], rejected=[], threshold=config.judge.confidence_threshold,
+        )  # fmt: skip
+        with sessions() as session:  # stored so the morning brief can say "no trades"
+            store_decision(session, cycle_id, result.decision, "none")
+            session.commit()
+        return
+    user = render_context(
+        as_of_text=as_of.astimezone(NEW_YORK).strftime("%Y-%m-%d %H:%M New York time"),
+        reports=result.reports, snap=snap, config=config, weights=weights,
+        model_scores=scores, positions=positions, lessons=lessons,
+    )  # fmt: skip
+    try:
+        judged = await claude.structured(
+            purpose="judge", model=config.judge.model, effort=effort,
+            max_tokens=config.judge.max_tokens, system=JUDGE_SYSTEM, user=user,
+            output=JudgeOutput, cycle_id=cycle_id,
+        )  # fmt: skip
+    except (BudgetExceededError, LLMError) as exc:
+        if isinstance(exc, LLMConfigError):
+            raise
+        result.runs.append(AgentRun("judge", "failed", detail=str(exc)))
+        result.notes.append(f"The judge did not run ({exc}); no trades were proposed.")
+        return
+    result.decision = decide(
+        output=judged.output, reports=result.reports, snap=snap, config=config,
+        weights=weights, model_scores=scores,
+    )  # fmt: skip
+    result.runs.append(
+        AgentRun("judge", "ok", len(result.decision.trades), cost_usd=judged.cost_usd)
+    )
+    with sessions() as session:
+        store_decision(session, cycle_id, result.decision, judged.model)
+        session.commit()
+
+
+def _report_from_row(row: m.AgentReport) -> AgentReport:
+    return AgentReport(
+        agent_name=row.agent_name, as_of=row.as_of, ticker=row.ticker, direction=row.direction.value,
+        confidence=row.confidence, horizon_days=row.horizon_days, thesis=row.thesis,
+        evidence=[CitedEvidence(**e) for e in row.evidence or []], risks=list(row.risks or []),
+        catalysts=list(row.catalysts or []), sector=row.sector, event_type=row.event_type,
+        dropped_claims=row.dropped_claims, report_id=row.id,
+    )  # fmt: skip
+
+
+def waiting_cycle(session: Session, day: date) -> m.DecisionCycle | None:
+    """Today's daily cycle whose agents have finished and whose judge has not run."""
+    cycles = session.scalars(
+        select(m.DecisionCycle)
+        .where(m.DecisionCycle.kind == m.CycleKind.DAILY, m.DecisionCycle.status == m.RunStatus.RUNNING,
+               m.DecisionCycle.as_of >= at_new_york(day, time(0)),
+               m.DecisionCycle.as_of < at_new_york(day + timedelta(days=1), time(0)))
+        .order_by(m.DecisionCycle.id.desc())
+    ).all()  # fmt: skip
+    return next((c for c in cycles if (c.notes or {}).get("stage") == AGENTS_DONE), None)
+
+
+async def run_judge_stage(
+    *,
+    config: AppConfig,
+    sessions: sessionmaker[Session],
+    claude: ClaudeClient,
+    now: datetime,
+    positions: Sequence[str] = (),
+    lessons: str | None = None,
+) -> CycleResult:
+    """08:20: pattern-model scores and the judge, on the reports the agents stored at 07:30."""
+    budget = claude.governor.status()
+    with sessions() as session:
+        cycle = waiting_cycle(session, new_york_date(now))
+        if cycle is None:
+            result = CycleResult(
+                as_of=now, kind=m.CycleKind.DAILY.value, status="skipped", budget=budget
+            )
+            result.notes.append("No research run is waiting for the judge today.")
+            return result
+        as_of = cycle.as_of
+        rows = session.scalars(
+            select(m.AgentReport)
+            .where(m.AgentReport.cycle_id == cycle.id)
+            .order_by(m.AgentReport.id)
+        ).all()
+        result = CycleResult(as_of=as_of, kind=cycle.kind.value, status="failed", budget=budget,
+                             cycle_id=cycle.id, reports=[_report_from_row(r) for r in rows])  # fmt: skip
+        snap: Snapshot = build_snapshot(session, config, as_of)
+        weights = agent_weights(session, as_of)
+        # Scored at the judge's time, the pattern model's decision time (08:20).
+        scores = score_live(session, config, now, cycle.id)
+        session.commit()
+    result.prices_through, result.covered = snap.prices_through, len(snap.covered)
+    if scores:
+        result.notes.append(f"Pattern model scored {len(scores)} stocks.")
+    if budget.mode == "stopped":
+        result.status = "skipped"
+        result.notes.append(f"The judge did not run: {budget.reason}.")
+        _finish(sessions, result, m.RunStatus.SKIPPED)
+        return result
+    effort = lower_effort(config.judge.effort) if budget.mode == "degraded" else config.judge.effort
+    try:
+        await _judge(result, config=config, sessions=sessions, claude=claude, snap=snap,
+                     weights=weights, scores=scores, positions=positions, lessons=lessons,
+                     effort=effort)  # fmt: skip
+    except LLMConfigError as exc:
+        result.notes.append(str(exc))
+        result.cost_usd = claude.governor.cycle_spent
+        _finish(sessions, result, m.RunStatus.FAILED)
+        return result
+    result.cost_usd = claude.governor.cycle_spent
     result.status = "succeeded"
     _finish(sessions, result, m.RunStatus.SUCCEEDED)
     return result
