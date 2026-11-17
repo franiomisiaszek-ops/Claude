@@ -137,7 +137,9 @@ def _spend_group(purpose: str) -> str:
     return "agents"
 
 
-def build_weekly(session: Session, config: AppConfig, now: datetime) -> str:
+def build_weekly(
+    session: Session, config: AppConfig, now: datetime, *, extra: Sequence[str] = ()
+) -> str:
     since = now - timedelta(days=7)
     closed = session.scalars(
         select(m.Trade).where(m.Trade.status == m.TradeStatus.CLOSED, m.Trade.exited_at >= since,
@@ -175,12 +177,13 @@ def build_weekly(session: Session, config: AppConfig, now: datetime) -> str:
     month_start = datetime.combine(new_york_date(now).replace(day=1), time(0), tzinfo=NEW_YORK)
     month = float(session.scalar(select(func.coalesce(func.sum(m.ApiUsage.cost_usd), 0.0))
                                  .where(m.ApiUsage.ts >= month_start)) or 0.0)  # fmt: skip
-    return format_weekly(
+    text = format_weekly(
         end=new_york_date(now), closed=len(closed), wins=sum(1 for t in closed if (t.pnl_usd or 0) > 0),
         pnl=sum(t.pnl_usd or 0.0 for t in closed), excess=sum(excess) / len(excess) if excess else None,
         leaderboard=leaderboard, model_line=model_line, spend_week=sum(parts.values()), spend_parts=parts,
         spend_month=month, budget=config.budget.monthly_usd,
     )  # fmt: skip
+    return text + ("\n\n" + "\n".join(extra) if extra else "")
 
 
 # --------------------------------------------------------------------------- bot answers

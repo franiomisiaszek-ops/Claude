@@ -14,6 +14,7 @@ cannot run up the API bill.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -25,7 +26,7 @@ from papertrader.agents import prompts
 from papertrader.agents.context import ContextItem, ContextPack, clip, stamp
 from papertrader.agents.schemas import AgentOutput, Confidence
 from papertrader.agents.validate import finalise
-from papertrader.config import AppConfig
+from papertrader.config import AppConfig, Settings
 from papertrader.db import models as m
 from papertrader.db.state import get_state, set_state
 from papertrader.db.types import utcnow
@@ -205,3 +206,53 @@ def _finish(
         if cycle is not None:
             cycle.status, cycle.finished_at, cycle.notes = status, utcnow(), notes
             session.commit()
+
+
+async def check_held_positions(
+    *,
+    config: AppConfig,
+    settings: Settings,
+    sessions: sessionmaker[Session],
+    engine: TradingEngine,
+    claude: Callable[[], ClaudeClient | None],
+    now: datetime,
+) -> list[str]:
+    """Fetch fresh news for held stocks, then review any with bad news (needs Claude).
+
+    Shared by `trade monitor` and the scheduled monitor. Returns lines for the log.
+    """
+    from papertrader.ingest.context import open_context
+    from papertrader.ingest.news import dedupe_news, ingest_alpaca_news
+
+    with sessions() as session:
+        held = sorted(
+            set(session.scalars(select(m.Trade.ticker).where(m.Trade.status == m.TradeStatus.OPEN)))
+        )
+    if not held:
+        return []
+    notes: list[str] = []
+    async with open_context(config, settings, sessions) as ctx:
+        if ctx.alpaca is not None:
+            try:  # a news outage must never stop the monitor
+                await ingest_alpaca_news(ctx, held, start=now - timedelta(days=3))
+                with sessions() as session:
+                    dedupe_news(session, since=now - timedelta(days=3),
+                                window_hours=config.ingest.news_dedupe_window_hours)  # fmt: skip
+                    session.commit()
+            except Exception as exc:
+                notes.append(
+                    f"news refresh failed ({type(exc).__name__}); checked stored news only"
+                )
+    with sessions() as session:
+        candidates = find_candidates(session, config, now)
+    if not candidates:
+        return notes
+    client = claude()
+    if client is None:
+        notes.append("bad news on " + ", ".join(c.ticker for c in candidates)
+                     + " but ANTHROPIC_API_KEY is not set, so it was not reviewed")  # fmt: skip
+        return notes
+    for candidate in candidates:
+        result = await review(candidate, engine=engine, claude=client, config=config, now=now)
+        notes.append(f"thesis check {result.ticker}: {result.detail}")
+    return notes

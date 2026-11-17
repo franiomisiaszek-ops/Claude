@@ -28,6 +28,8 @@ trade_app = typer.Typer(
 app.add_typer(trade_app, name="trade")
 telegram_app = typer.Typer(no_args_is_help=True, help="Telegram messages and the bot.")
 app.add_typer(telegram_app, name="telegram")
+jobs_app = typer.Typer(no_args_is_help=True, help="The daily schedule: see it, run a job by hand.")
+app.add_typer(jobs_app, name="jobs")
 
 
 def _fail(message: str) -> typer.Exit:
@@ -469,59 +471,23 @@ def trade_test_order(
 
 def _thesis_checks(runtime: Any, engine: Any) -> list[str]:
     """Fetch fresh news for held stocks, then review any with bad news (needs Claude)."""
-    from datetime import timedelta
-
-    from sqlalchemy import select
-
-    from papertrader.db.models import Trade, TradeStatus
     from papertrader.db.types import utcnow
-    from papertrader.ingest.context import open_context
-    from papertrader.ingest.news import dedupe_news, ingest_alpaca_news
     from papertrader.llm.client import ClaudeClient, make_anthropic
     from papertrader.llm.governor import CostGovernor
-    from papertrader.trading.thesis import find_candidates, review
+    from papertrader.trading.thesis import check_held_positions
 
-    with runtime.session_factory() as session:
-        open_tickers = select(Trade.ticker).where(Trade.status == TradeStatus.OPEN)
-        held = sorted(set(session.scalars(open_tickers)))
-    if not held:
-        return []
-    key = runtime.settings.anthropic_api_key
-    notes = []
-
-    async def go() -> None:
-        now = utcnow()
-        async with open_context(runtime.config, runtime.settings, runtime.session_factory) as ctx:
-            if ctx.alpaca is not None:
-                try:  # a news outage must never stop the monitor
-                    await ingest_alpaca_news(ctx, held, start=now - timedelta(days=3))
-                    with runtime.session_factory() as session:
-                        dedupe_news(session, since=now - timedelta(days=3),
-                                    window_hours=runtime.config.ingest.news_dedupe_window_hours)  # fmt: skip
-                        session.commit()
-                except Exception as exc:
-                    notes.append(
-                        f"news refresh failed ({type(exc).__name__}); checked stored news only"
-                    )
-        with runtime.session_factory() as session:
-            candidates = find_candidates(session, runtime.config, now)
-        if candidates and key is None:
-            notes.append("bad news on " + ", ".join(c.ticker for c in candidates)
-                         + " but ANTHROPIC_API_KEY is not set, so it was not reviewed")  # fmt: skip
-            return
-        if not candidates:
-            return
+    def claude() -> ClaudeClient | None:
+        key = runtime.settings.anthropic_api_key
+        if key is None:
+            return None
         governor = CostGovernor(runtime.session_factory, runtime.config.budget)
-        claude = ClaudeClient(make_anthropic(key.get_secret_value()), runtime.session_factory,
-                              runtime.config.budget, governor)  # fmt: skip
-        for candidate in candidates:
-            result = await review(
-                candidate, engine=engine, claude=claude, config=runtime.config, now=now
-            )
-            notes.append(f"thesis check {result.ticker}: {result.detail}")
+        return ClaudeClient(make_anthropic(key.get_secret_value()), runtime.session_factory,
+                            runtime.config.budget, governor)  # fmt: skip
 
-    asyncio.run(go())
-    return notes
+    return asyncio.run(check_held_positions(
+        config=runtime.config, settings=runtime.settings, sessions=runtime.session_factory,
+        engine=engine, claude=claude, now=utcnow(),
+    ))  # fmt: skip
 
 
 def _monitor_once(runtime: Any, engine: Any, *, thesis: bool) -> None:
@@ -873,6 +839,116 @@ def telegram_listen() -> None:
                 typer.echo(f"Telegram problem: {exc}; retrying")
     except KeyboardInterrupt:
         typer.echo("Stopped.")
+
+
+# ----------------------------------------------------------------------------- jobs
+
+
+def _jobs() -> Any:
+    from papertrader.runtime import bootstrap
+    from papertrader.scheduler.jobs import Jobs
+
+    try:
+        runtime = bootstrap(migrate=True, log_format="console")
+    except (ConfigError, LiveTradingForbiddenError) as exc:
+        raise _fail(str(exc)) from exc
+    return Jobs(runtime)
+
+
+@jobs_app.command("list")
+def jobs_list() -> None:
+    """The schedule (New York time) and how each job went today."""
+    from sqlalchemy import select
+
+    from papertrader.db.models import JobRun
+    from papertrader.db.types import utcnow
+    from papertrader.ingest.timeutil import NEW_YORK, at_new_york, new_york_date
+    from papertrader.scheduler.jobs import SPECS
+
+    jobs = _jobs()
+    now = utcnow()
+    day = new_york_date(now)
+    cfg = jobs.config.schedule
+    trading = jobs.trading_day(day)
+    if trading is None:
+        typer.echo(f"Today ({day:%a %d %b}) the market is closed.")
+    else:
+        typer.echo(f"Today ({day:%a %d %b}) the market is open "
+                   f"{trading.open.astimezone(NEW_YORK):%H:%M}-{trading.close.astimezone(NEW_YORK):%H:%M} New York time.")  # fmt: skip
+    from datetime import time as time_type
+    from datetime import timedelta
+
+    start, end = at_new_york(day, time_type(0)), at_new_york(day + timedelta(days=1), time_type(0))
+    with jobs.sessions() as session:
+        runs = session.scalars(select(JobRun).where(JobRun.scheduled_for >= start, JobRun.scheduled_for < end)
+                               .order_by(JobRun.id)).all()  # fmt: skip
+    latest = {run.job_name: run for run in runs}
+    typer.echo(f"\n{'job':<18}{'when':<16}{'today':<11}what it does")
+    for spec in SPECS:
+        if spec.at is None:
+            when = f"every {cfg.monitor_interval_minutes} min"
+        elif spec.weekly:
+            when = f"{cfg.weekly_day} {spec.at(jobs.config):%H:%M}"
+        else:
+            when = f"{spec.at(jobs.config):%H:%M}"
+        run = latest.get(spec.name)
+        state = run.status.value if run else "-"
+        typer.echo(f"{spec.name:<18}{when:<16}{state:<11}{spec.title}")
+    typer.echo("\nRun one now with: papertrader jobs run NAME")
+
+
+@jobs_app.command("run")
+def jobs_run(
+    name: Annotated[str, typer.Argument(help="Job name, from `papertrader jobs list`.")],
+) -> None:
+    """Run one job now (also on a weekend or holiday). Recorded like a scheduled run."""
+    from papertrader.scheduler.jobs import BY_NAME
+
+    if name not in BY_NAME:
+        raise _fail(f"unknown job {name}. Jobs: {', '.join(BY_NAME)}")
+    jobs = _jobs()
+    start = _latest_notification_id(jobs.runtime)
+    outcome = jobs.run(name, manual=True)
+    colour = {"succeeded": typer.colors.GREEN, "failed": typer.colors.RED}.get(outcome.status)
+    typer.secho(
+        f"{name}: {outcome.status}" + (f" - {outcome.detail}" if outcome.detail else ""), fg=colour
+    )
+    for key in ("placements", "exits", "warnings", "notes", "weights"):
+        for line in outcome.details.get(key) or []:
+            typer.echo(f"  {line}")
+    _show_notifications(jobs.runtime, start)
+    if outcome.status == "failed":
+        raise typer.Exit(code=1)
+
+
+@jobs_app.command("history")
+def jobs_history(
+    days: Annotated[int, typer.Option(help="How many days back.")] = 3,
+    monitor: Annotated[bool, typer.Option(help="Include the 10-minute monitor runs.")] = False,
+) -> None:
+    """Recent job runs: when, how long, result."""
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from papertrader.db.models import JobRun
+    from papertrader.db.types import utcnow
+    from papertrader.ingest.timeutil import NEW_YORK
+
+    jobs = _jobs()
+    query = select(JobRun).where(JobRun.scheduled_for >= utcnow() - timedelta(days=days))
+    if not monitor:
+        query = query.where(JobRun.job_name != "monitor")
+    with jobs.sessions() as session:
+        runs = session.scalars(query.order_by(JobRun.scheduled_for)).all()
+        for run in runs:
+            took = (f"{(run.finished_at - run.started_at).total_seconds():.0f}s"
+                    if run.finished_at and run.started_at else "")  # fmt: skip
+            summary = run.error or (run.details or {}).get("summary", "")
+            typer.echo(f"{run.scheduled_for.astimezone(NEW_YORK):%a %d %b %H:%M}  {run.job_name:<18}"
+                       f"{run.status.value:<10}{took:>6}  {str(summary)[:110]}")  # fmt: skip
+    if not runs:
+        typer.echo("No job runs yet. They start once the app is running: docker compose up -d")
 
 
 def _split(value: str | None) -> list[str] | None:
