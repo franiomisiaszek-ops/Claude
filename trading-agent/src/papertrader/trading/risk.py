@@ -71,6 +71,11 @@ class Verdict:
         return self.qty * self.reference_price
 
 
+def _cents(price: float) -> float:
+    """US stocks above $1 are priced in whole cents (below $1, in hundredths of a cent)."""
+    return round(price, 2) if price >= 1 else round(price, 4)
+
+
 def refuse(reason: str) -> Verdict:
     return Verdict(False, reason)
 
@@ -98,7 +103,7 @@ def check_entry(
             )
         if price <= p.stop_price:
             return refuse(f"price {price:.2f} is already at or below the stop {p.stop_price:.2f}")
-        limit = min(p.entry_high, price * (1 + trading.limit_slippage_pct))
+        limit = _cents(min(p.entry_high, price * (1 + trading.limit_slippage_pct)))
     else:
         if price < p.entry_low * (1 - trading.limit_slippage_pct):
             return refuse(
@@ -106,7 +111,7 @@ def check_entry(
             )
         if price >= p.stop_price:
             return refuse(f"price {price:.2f} is already at or above the stop {p.stop_price:.2f}")
-        limit = max(p.entry_low, price * (1 - trading.limit_slippage_pct))
+        limit = _cents(max(p.entry_low, price * (1 - trading.limit_slippage_pct)))
     reference = limit  # the most the entry can cost per share
 
     far_side = p.target_price - reference if buy else reference - p.target_price

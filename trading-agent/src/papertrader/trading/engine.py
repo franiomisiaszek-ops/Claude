@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from papertrader.config import AppConfig
 from papertrader.db import models as m
+from papertrader.db import types as db_types
 from papertrader.db.state import KILL_SWITCH_KEY, TRADING_PAUSED_KEY, get_state, set_state
 from papertrader.db.types import utcnow
 from papertrader.ingest.timeutil import NEW_YORK, new_york_date
@@ -101,13 +102,13 @@ class TradingEngine:
         broker: Broker,
         config: AppConfig,
         *,
-        now: Callable[[], datetime] = utcnow,
+        now: Callable[[], datetime] | None = None,
         sleep: Callable[[float], None] = clock_time.sleep,
     ) -> None:
         self.sessions = sessions
         self.broker = broker
         self.config = config
-        self.now = now
+        self.now: Callable[[], datetime] = now or (lambda: db_types.utcnow())
         self.sleep = sleep
         self.benchmark = config.universe.benchmark
 
@@ -320,8 +321,43 @@ class TradingEngine:
                     )
                     continue
                 self._apply(session, top, fresh, report)
+            self._catch_up(session, report)
             session.commit()
         return report
+
+    def _catch_up(self, session: Session, report: SyncReport) -> None:
+        """Fills that were already final when first recorded (for example a market order
+        that filled before the submit call returned) never pass through `_apply`."""
+        entries = session.scalars(
+            select(m.Order).where(m.Order.leg == m.OrderLeg.ENTRY, m.Order.status.in_(sorted(_FINAL)),
+                                  m.Order.filled_qty > 0, m.Order.trade_id.is_(None))
+        ).all()  # fmt: skip
+        for entry in entries:
+            self._record_fill(session, entry)
+            trade = self._open_trade(session, entry)
+            for leg in session.scalars(select(m.Order).where(m.Order.parent_order_id == entry.id)):
+                leg.trade_id = trade.id
+            report.opened.append(trade.ticker)
+        exits = session.scalars(
+            select(m.Order)
+            .join(m.Trade, m.Trade.id == m.Order.trade_id)
+            .where(m.Order.leg.in_((m.OrderLeg.EXIT, m.OrderLeg.TAKE_PROFIT, m.OrderLeg.STOP_LOSS)),
+                   m.Order.status == "filled", m.Trade.status == m.TradeStatus.OPEN)
+        ).all()  # fmt: skip
+        for order in exits:
+            self._record_fill(session, order)
+            trigger = {
+                m.OrderLeg.TAKE_PROFIT: m.ExitTrigger.TARGET,
+                m.OrderLeg.STOP_LOSS: m.ExitTrigger.STOP,
+            }.get(order.leg)
+            closing = session.get(m.Trade, order.trade_id)
+            trigger = trigger or (
+                closing.exit_trigger if closing and closing.exit_trigger else m.ExitTrigger.MANUAL
+            )
+            if order.trade_id is not None and self._close_trade(
+                session, order.trade_id, order, trigger
+            ):
+                report.closed.append(order.ticker)
 
     def _apply(
         self, session: Session, top: m.Order, fresh: BrokerOrder, report: SyncReport
@@ -603,14 +639,18 @@ class TradingEngine:
     def snapshot(self, kind: str = "intraday") -> m.EquitySnapshot:
         account = self.broker.account()
         positions = self.broker.positions()
+        now = self.now()
         with self.sessions() as session:
-            row = m.EquitySnapshot(
-                ts=self.now(), kind=kind, equity=account.equity, cash=account.cash,
-                positions_value=sum(p.market_value for p in positions),
-                benchmark_close=self._benchmark_price(),
-                day_pnl_usd=account.equity - account.last_equity, day_pnl_pct=account.day_change_pct,
-            )  # fmt: skip
-            session.add(row)
+            row = session.scalar(select(m.EquitySnapshot).where(m.EquitySnapshot.ts == now))
+            if row is None:
+                row = m.EquitySnapshot(ts=now, equity=0.0, cash=0.0, positions_value=0.0)
+                session.add(row)
+            row.kind = kind
+            row.equity, row.cash = account.equity, account.cash
+            row.positions_value = sum(p.market_value for p in positions)
+            row.benchmark_close = self._benchmark_price()
+            row.day_pnl_usd = account.equity - account.last_equity
+            row.day_pnl_pct = account.day_change_pct
             session.commit()
         return row
 

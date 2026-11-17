@@ -491,11 +491,16 @@ def _thesis_checks(runtime: Any, engine: Any) -> list[str]:
         now = utcnow()
         async with open_context(runtime.config, runtime.settings, runtime.session_factory) as ctx:
             if ctx.alpaca is not None:
-                await ingest_alpaca_news(ctx, held, start=now - timedelta(days=3))
-                with runtime.session_factory() as session:
-                    dedupe_news(session, since=now - timedelta(days=3),
-                                window_hours=runtime.config.ingest.news_dedupe_window_hours)  # fmt: skip
-                    session.commit()
+                try:  # a news outage must never stop the monitor
+                    await ingest_alpaca_news(ctx, held, start=now - timedelta(days=3))
+                    with runtime.session_factory() as session:
+                        dedupe_news(session, since=now - timedelta(days=3),
+                                    window_hours=runtime.config.ingest.news_dedupe_window_hours)  # fmt: skip
+                        session.commit()
+                except Exception as exc:
+                    notes.append(
+                        f"news refresh failed ({type(exc).__name__}); checked stored news only"
+                    )
         with runtime.session_factory() as session:
             candidates = find_candidates(session, runtime.config, now)
         if candidates and key is None:

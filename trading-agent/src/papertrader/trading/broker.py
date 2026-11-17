@@ -182,7 +182,8 @@ class AlpacaPaperBroker:
     def __init__(self, api_key: str, secret_key: str, *, live_feed: str = "iex") -> None:
         assert_paper_only(ALPACA_PAPER_BASE_URL, api_key=api_key)
         self._client = TradingClient(api_key, secret_key, paper=True, raw_data=True)
-        actual = str(getattr(self._client, "_base_url", ""))
+        base = getattr(self._client, "_base_url", "")
+        actual = str(getattr(base, "value", base))  # the SDK stores an enum, not a plain string
         if actual.rstrip("/") != ALPACA_PAPER_BASE_URL:
             raise LiveTradingForbiddenError(
                 f"trading client points at {actual!r}, not the paper endpoint"
