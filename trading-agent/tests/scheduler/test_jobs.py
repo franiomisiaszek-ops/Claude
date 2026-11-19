@@ -330,3 +330,66 @@ def test_after_a_holiday_fresh_news_reaches_back_to_the_last_trading_day(
         "Wed 25 05:30",
         "Mon 30 05:30",
     ]
+
+
+def test_the_watchdog_says_when_backups_stop(
+    world: World, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    folder = tmp_path / "backups"
+    folder.mkdir()
+    monkeypatch.setattr(world.jobs.runtime.settings, "backups_dir", folder)
+    world.at(MONDAY, 12, 0)
+    assert "backup" not in world.jobs.watchdog()  # a new installation: nothing expected yet
+    with world.jobs.sessions() as session:  # the app has been running for three days
+        session.add(m.JobRun(job_name="ingest", scheduled_for=world.clock[0] - timedelta(days=3),
+                             started_at=world.clock[0] - timedelta(days=3), status=m.RunStatus.SUCCEEDED))  # fmt: skip
+        session.commit()
+    assert "backup" in world.jobs.watchdog()
+    assert any("No database backup has been made yet" in n.text for n in world.notes())
+    dump = folder / "papertrader-2026-11-16_0500.dump"
+    dump.write_bytes(b"x")
+    fresh = (world.clock[0] - timedelta(hours=7)).timestamp()
+    os.utime(dump, (fresh, fresh))
+    world.at(MONDAY + timedelta(days=1), 12, 0)
+    assert "backup" not in world.jobs.watchdog()
+    world.at(MONDAY + timedelta(days=2), 12, 0)
+    assert "backup" in world.jobs.watchdog()
+    assert any("The newest database backup is 55 hours old" in n.text for n in world.notes())
+
+
+def test_the_watchdog_checks_the_clock_hourly(world: World) -> None:
+    from dataclasses import replace
+
+    real = world.broker.clock
+    world.broker.clock = lambda: replace(
+        real(), timestamp=real().timestamp - timedelta(seconds=150)
+    )  # type: ignore[method-assign]
+    world.at(MONDAY, 12, 0)
+    assert world.jobs.clock_offset() == pytest.approx(150)
+    assert "clock" in world.jobs.watchdog()
+    assert any("clock is 150 seconds ahead of the market's" in n.text for n in world.notes())
+    world.at(MONDAY, 12, 30)
+    assert "clock" not in world.jobs.watchdog()  # checked at most once an hour
+    world.broker.clock = real  # type: ignore[method-assign]
+    world.at(MONDAY, 13, 30)
+    assert "clock" not in world.jobs.watchdog()
+
+
+def test_old_training_datasets_are_deleted(tmp_path: Any) -> None:
+    from papertrader.model.pipeline import prune_datasets
+
+    for day in range(1, 6):
+        (tmp_path / f"dataset_2026111{day}_090000.parquet").write_bytes(b"x")
+        (tmp_path / f"dataset_2026111{day}_090000.json").write_text("{}")
+    (tmp_path / "pm-1").mkdir()
+    removed = prune_datasets(tmp_path, keep=3)
+    assert sorted(p.name for p in removed) == [
+        "dataset_20261111_090000.parquet",
+        "dataset_20261112_090000.parquet",
+    ]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "dataset_20261113_090000.json", "dataset_20261113_090000.parquet", "dataset_20261114_090000.json",
+        "dataset_20261114_090000.parquet", "dataset_20261115_090000.json", "dataset_20261115_090000.parquet", "pm-1",
+    ]  # fmt: skip

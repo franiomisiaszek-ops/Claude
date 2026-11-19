@@ -52,3 +52,26 @@ def test_jobs_run_records_the_run_and_history_shows_it(project: Path) -> None:
 def test_jobs_run_refuses_unknown_names(project: Path) -> None:
     result = runner.invoke(app, ["jobs", "run", "buy_everything"])
     assert result.exit_code == 1 and "unknown job buy_everything" in result.output
+
+
+def test_check_compares_the_clock_with_alpaca(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import timedelta
+
+    from papertrader.db.types import utcnow
+
+    from ..trading.helpers import FakeBroker
+
+    clock = [utcnow()]
+    monkeypatch.setenv("ALPACA_API_KEY", "PKTEST")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setattr(
+        "papertrader.trading.broker.AlpacaPaperBroker", lambda *a, **k: FakeBroker(clock)
+    )
+    assert runner.invoke(app, ["db", "upgrade"]).exit_code == 0
+    result = runner.invoke(app, ["check"])
+    assert result.exit_code == 0 and "Clock            : OK" in result.output
+    clock[0] = utcnow() + timedelta(minutes=5)  # the market's clock is 5 minutes ahead of ours
+    result = runner.invoke(app, ["check"])
+    assert "-300 s off Alpaca's clock" in result.output

@@ -73,6 +73,18 @@ def check() -> None:
     typer.echo("Keys in .env     :")
     for name, present in runtime.settings.secret_status().items():
         typer.echo(f"  {'set    ' if present else 'MISSING'}  {name}")
+
+    if runtime.settings.alpaca_api_key and runtime.settings.alpaca_secret_key:
+        from papertrader.scheduler.jobs import Jobs
+
+        offset = Jobs(runtime).clock_offset()
+        if offset is None:
+            typer.echo("Clock            : could not compare with Alpaca (offline?)")
+        elif abs(offset) <= Jobs.CLOCK_TOLERANCE_SECONDS:
+            typer.echo(f"Clock            : OK ({offset:+.1f} s from Alpaca's)")
+        else:
+            typer.secho(f"Clock            : {offset:+.0f} s off Alpaca's clock. Restart Docker Desktop and "
+                        "sync the Windows clock (Settings > Time > Sync now).", fg=typer.colors.YELLOW)  # fmt: skip
     typer.secho("OK", fg=typer.colors.GREEN)
 
 

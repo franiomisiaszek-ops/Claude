@@ -28,6 +28,17 @@ from papertrader.model.train import (
     walk_forward,
 )
 
+KEEP_DATASETS = 3  # older training datasets are deleted: each can be rebuilt from the database
+
+
+def prune_datasets(folder: Path, keep: int = KEEP_DATASETS) -> list[Path]:
+    """Delete all but the newest `keep` dataset files, so weekly retraining cannot fill the disk."""
+    old = sorted(folder.glob("dataset_*.parquet"), reverse=True)[keep:]
+    for path in old:
+        path.unlink(missing_ok=True)
+        path.with_suffix(".json").unlink(missing_ok=True)
+    return old
+
 
 class NotEnoughDataError(RuntimeError):
     pass
@@ -82,6 +93,7 @@ def run_training(
             "Load more history with `papertrader ingest backfill` first."
         )
     dataset_path = save_dataset(table, folder, as_of=as_of)
+    prune_datasets(folder, keep=KEEP_DATASETS)
 
     validation = walk_forward(table, cfg, horizon)
     scored = validation.predictions

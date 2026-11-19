@@ -6,6 +6,9 @@
 # Local data, databases, model files, generated reports
 data/
 reports/
+backups/
+*.dump
+*.tgz
 *.db
 *.sqlite3
 *.parquet

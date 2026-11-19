@@ -15,11 +15,11 @@ import threading
 import time as time_module
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 from anthropic import AsyncAnthropic
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from papertrader.config import AppConfig
@@ -103,6 +103,7 @@ class Jobs:
         self.sleep = sleep
         self.trading_lock = threading.Lock()  # orders, monitor and reconcile never overlap
         self._days: dict[date, TradingDay | None] = {}
+        self._clock_checked: datetime | None = None
 
     # ------------------------------------------------------------------ resources
 
@@ -570,6 +571,11 @@ class Jobs:
                                          error="did not run (app off, asleep or busy)"))  # fmt: skip
                     missed.append((name, when))
             stalled = self._monitor_stalled(session, now)
+            backup = self._backup_problem(session, now)
+            clock = self._clock_problem(now)
+            for problem, key in ((backup, "backup"), (clock, "clock")):
+                if problem:
+                    queue(session, "alert", messages.alert(problem), dedup_key=f"{key}:{day}")
             if missed:
                 listed = ", ".join(
                     f"{name} ({when.astimezone(NEW_YORK):%H:%M})" for name, when in missed
@@ -582,7 +588,51 @@ class Jobs:
                 queue(session, "alert", messages.alert(stalled),
                       dedup_key=f"monitor-stalled:{now.astimezone(NEW_YORK):%Y-%m-%dT%H}")  # fmt: skip
             session.commit()
-        return [name for name, _ in missed] + (["monitor"] if stalled else [])
+        flags = [("monitor", stalled), ("backup", backup), ("clock", clock)]
+        return [name for name, _ in missed] + [name for name, problem in flags if problem]
+
+    BACKUP_MAX_AGE = timedelta(hours=36)
+
+    def _backup_problem(self, session: Any, now: datetime) -> str | None:
+        """The backup service writes one database dump a day; say so if they stopped."""
+        folder = self.runtime.settings.backups_dir
+        if folder is None or not folder.is_dir():
+            return None
+        newest = max((p.stat().st_mtime for p in folder.glob("papertrader-*.dump")), default=None)
+        if newest is None:
+            first = session.scalar(select(func.min(m.JobRun.started_at)))
+            if first is None or now - first < timedelta(hours=48):
+                return None  # a new installation: the first backup comes at night
+            return "No database backup has been made yet. Check the backup service: docker compose logs backup"
+        age = now - datetime.fromtimestamp(newest, tz=UTC)
+        if age <= self.BACKUP_MAX_AGE:
+            return None
+        return (f"The newest database backup is {age.total_seconds() / 3600:.0f} hours old. "
+                "Check the backup service: docker compose logs backup")  # fmt: skip
+
+    CLOCK_TOLERANCE_SECONDS = 60.0
+
+    def clock_offset(self) -> float | None:
+        """Seconds this computer's clock is ahead (+) or behind (-) Alpaca's; None if unknown."""
+        try:
+            broker = self._broker()
+            return (
+                None if broker is None else (self.now() - broker.clock().timestamp).total_seconds()
+            )
+        except Exception:
+            return None
+
+    def _clock_problem(self, now: datetime) -> str | None:
+        """At most once an hour: a wrong clock means jobs and time stops at the wrong time."""
+        if self._clock_checked is not None and now - self._clock_checked < timedelta(hours=1):
+            return None
+        self._clock_checked = now
+        offset = self.clock_offset()
+        if offset is None or abs(offset) <= self.CLOCK_TOLERANCE_SECONDS:
+            return None
+        return (f"This computer's clock is {abs(offset):.0f} seconds {'ahead of' if offset > 0 else 'behind'} "
+                "the market's. Jobs and time stops will run at the wrong moment. Restart Docker Desktop "
+                "(after sleep its clock can drift) and check Windows: Settings > Time > Sync now.")  # fmt: skip
 
     def _monitor_stalled(self, session: Any, now: datetime) -> str | None:
         trading = self.trading_day(new_york_date(now))

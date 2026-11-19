@@ -413,6 +413,7 @@ class Settings(BaseSettings):
     papertrader_config: Path = Path("config.yaml")
     data_dir: Path = Path("data")
     reports_dir: Path = Path("reports")
+    backups_dir: Path | None = None  # where the backup service writes (read-only to the app)
     log_level: str = "INFO"
     log_format: Literal["json", "console"] = "json"
 
