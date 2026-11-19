@@ -65,6 +65,15 @@ jobs:
         run: docker compose up -d --build --wait --wait-timeout 180
       - name: Startup checks inside the app container
         run: docker compose exec -T app papertrader check
+      - name: Backup and restore inside the containers
+        run: |
+          docker compose exec -T backup sh /scripts/backup.sh now
+          dump=$(docker compose exec -T backup sh -c 'ls -1 /backups/papertrader-*.dump | tail -n 1' | tr -d '\r')
+          echo "restoring $dump"
+          docker compose stop app dashboard
+          docker compose exec -T backup sh /scripts/restore.sh "$dump" --yes
+          docker compose start app dashboard
+          docker compose exec -T app papertrader check
       - name: Show logs on failure
         if: failure()
         run: docker compose logs --no-color

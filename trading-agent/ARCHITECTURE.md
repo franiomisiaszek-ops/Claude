@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phases 1-7)
+## What exists today (Phases 1-8)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -35,7 +35,8 @@ database, so steps are independent: one can fail and be re-run without redoing t
 | Service | `scheduler/service.py` | APScheduler in New York time: the daily schedule, watchdog, heartbeat, Telegram sender, bot |
 | Jobs | `scheduler/jobs.py` | Every scheduled job, recorded in `job_runs`; alerts on failure; the watchdog |
 | Learning | `learning/` | Scores past agent calls, per-agent accuracy, weights, weekly lessons |
-| Dashboard | `dashboard/` | Read-only Streamlit status page |
+| Dashboard | `dashboard/` | Read-only Streamlit pages: equity, trades, decisions, leaderboard, model, spend, jobs |
+| Backups | `scripts/`, `backup` service | Nightly database + model backup, restore script |
 | Health check | `healthcheck.py` | Docker marks the app unhealthy if the heartbeat stops |
 | Ingestion | `ingest/` | Loads and refreshes every data source (see below) |
 | Claude access | `llm/` | One client, cost per call, the budget governor |
@@ -509,6 +510,55 @@ Known limits:
 - **Lessons are written by Claude** from the figures given; the prompt forbids outside
   knowledge, but the text is advice to the judge, not a tested rule.
 
+## Dashboard and deployment (Phase 8)
+
+```
+dashboard/data.py     plain query functions returning pandas frames (tested without Streamlit)
+dashboard/charts.py   Altair charts with a fixed, color-blind-checked palette
+dashboard/app.py      the pages, picked in the sidebar
+scripts/backup.sh     nightly backup loop (runs in the backup container)
+scripts/restore.sh    restore one backup, all or nothing
+docs/WINDOWS.md       the beginner's guide for running it on the Windows PC
+```
+
+**Dashboard.** The database connection is opened read-only, so the pages cannot change
+anything. Queries live in `data.py` and return DataFrames with display-ready values
+(percentages already x100), so they are tested directly; every page is also rendered in
+tests through Streamlit's test runner, empty and with data. The cached connection is
+keyed by database URL. Charts: each series keeps the color of its fixed slot (papertrader
+first, SPY second, agents in a fixed order), only the series present appear in legends,
+the palette was run through a color-vision check for light and dark, the theme follows
+Streamlit's, and every chart has a table next to it. The equity curve uses the closing
+snapshot of each day (the latest one for today); SPY is price-only, like the paper account,
+which pays no dividends.
+
+**Backups.** A fourth container runs the `postgres:16-alpine` image, so `pg_dump` always
+matches the server. Once a day after 05:00 UTC it writes `papertrader-<stamp>.dump`
+(custom format, written to a `.part` file and renamed, so a failed dump never looks like a
+backup) and `models-<stamp>.tgz` (the `pm-*` model folders; training datasets are left
+out because they are rebuilt from the database), then keeps the newest `BACKUP_KEEP`
+(default 7). `BACKUP_DIR` in `.env` can point the folder at OneDrive for an off-site copy.
+`restore.sh` asks for YES, runs `pg_restore --clean --if-exists --single-transaction` (all
+or nothing) and puts the models back. The scripts are forced to Unix line endings by
+`.gitattributes`, and the service strips carriage returns before running, in case a
+Windows checkout added them.
+
+**Watchdog additions.** The app mounts the backups folder read-only and alerts (once a
+day) when the newest dump is older than 36 hours, or when none exists after 48 hours of
+running. Once an hour it compares its clock with Alpaca's and alerts beyond 60 seconds
+(Docker's clock can drift after the PC sleeps); `papertrader check` shows the same.
+
+**Long-running hygiene.** Container logs are capped at 5 x 10 MB each; weekly retraining
+deletes all but the newest 3 training datasets.
+
+Known limits:
+
+- **One PC.** If it is off, asleep or signed out, jobs are missed (and reported once it is
+  back). Stops and targets still work at Alpaca.
+- **Backups on the same disk** protect against mistakes, not a dead disk, unless
+  `BACKUP_DIR` points at OneDrive or they are copied elsewhere.
+- **Restore is manual** and replaces everything after the backup.
+
 ## Design rules
 
 ### 1. Paper trading only
@@ -589,4 +639,4 @@ Review the generated file in `src/papertrader/db/migrations/versions/`, run the 
 - `uv run pytest` runs everything; no network, no keys.
 - Database tests run on SQLite, and also on PostgreSQL when `TEST_DATABASE_URL` is set.
 - CI (`.github/workflows/trading-agent.yml`) runs lint, format check, type check and tests,
-  then builds the Docker images, starts all three services and waits for them to be healthy.
+  then builds the Docker images, starts the services and waits for them to be healthy.

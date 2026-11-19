@@ -28,14 +28,17 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 | 5 | Trading engine + risk rules | **done** (needs your test on the paper account, see below) |
 | 6 | Telegram messages + bot commands | **done** (needs your test, see below) |
 | 7 | Learning loop + scheduler | **done** (runs by itself once the app is up, see below) |
-| 8 | Dashboard + deployment guide | not started |
+| 8 | Dashboard + deployment guide | **done** (see [docs/WINDOWS.md](docs/WINDOWS.md)) |
 | 9 | Run on paper for 4-8 weeks | not started |
 
 Right now the program can load and refresh all its data, run the research agents and the
 judge, trade their decisions on the Alpaca paper account, send everything to you on
 Telegram, and run all of it by itself every trading day while the app is up. It scores
-its own past calls and learns from them each week. The dashboard and the deployment
-guide come next (Phase 8).
+its own past calls and learns from them each week. A dashboard shows all of it, and a
+backup is made every night. Next is the paper run itself (Phase 9).
+
+**Running it day to day (power settings, backups, updates, troubleshooting):
+[docs/WINDOWS.md](docs/WINDOWS.md).**
 
 ## Decisions in effect
 
@@ -50,6 +53,9 @@ guide come next (Phase 8).
 All of these live in [`config.yaml`](config.yaml), with comments.
 
 ## Start it (Docker, Windows 10)
+
+The full step-by-step guide, from installing Docker to backups and updates, is
+[docs/WINDOWS.md](docs/WINDOWS.md). The short version:
 
 You need [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running.
 Open **PowerShell** in this folder (`trading-agent`): in File Explorer, open the folder,
@@ -457,7 +463,8 @@ the clocks change on different dates and it is 5 hours.
 **Your computer must be on and awake** at those times, with Docker Desktop running. In
 Windows: Settings > System > Power & sleep > Sleep: "Never" (when plugged in), and in
 Docker Desktop: Settings > General > "Start Docker Desktop when you sign in". The app and
-the database restart by themselves after a reboot. Phase 8 covers this in detail.
+the database restart by themselves after a reboot. [docs/WINDOWS.md](docs/WINDOWS.md),
+section 3, has the details (Windows Update hours, signing in after a restart).
 
 **If something does not run, you hear about it.** A job that fails sends an alert. Every
 five minutes a watchdog checks that each of today's jobs ran (15 minutes of grace), and
@@ -511,6 +518,34 @@ cost about $0.10); the first week will show it, in `/status` and the weekly summ
 Headline labels cost a few cents a day, the lessons $0.10-0.30 a week. Whatever happens,
 the $100 monthly budget is enforced in code: each day may spend about what is left for
 the month divided by the trading days left, and close to the limit fewer agents run.
+
+## Dashboard (Phase 8)
+
+<http://localhost:8501>, only from this PC. Read-only: nothing on it can change the system.
+
+| Page | What it shows |
+|---|---|
+| Overview | Equity, return since start vs SPY, open trades, win rate, API spend, whether the app is running, paused or stopped by the kill switch, today's jobs |
+| Equity vs SPY | Return since start against SPY, and the drawdown (how far below the best level so far) |
+| Trades | Open and closed trades: prices, P&L, how they ended, which agents were right |
+| Decisions and reports | Any day's decision: market summary, ideas with every part of the confidence, rejected ideas, and every agent report with its evidence and sources |
+| Agent leaderboard | Hit rate, Brier score and return per agent (30/90/365 days), by sector and event type; the weights the judge uses; the latest lessons |
+| Pattern model | Every trained version with its out-of-sample results and why it was or wasn't used |
+| API spend | Spend per day, by purpose and model, against the budget |
+| Jobs and messages | Every scheduled run and every Telegram message |
+
+## Backups (Phase 8)
+
+A `backup` container saves the whole database and the trained models every night
+(about 06:00 Polish time) into the `backups` folder and keeps the newest 7. The app
+alerts you on Telegram if backups stop. A backup right now:
+
+```bash
+docker compose exec backup sh /scripts/backup.sh now
+```
+
+How to keep a copy in OneDrive, restore a backup, and update safely:
+[docs/WINDOWS.md](docs/WINDOWS.md), sections 5-7.
 
 ## Your keys
 
@@ -570,7 +605,9 @@ Tests never touch the network and need no keys.
 ```
 config.yaml            behaviour: schedule, risk limits, models, budget (no secrets)
 .env.example           template for your private keys
-docker-compose.yml     db + app + dashboard
+docker-compose.yml     db + app + dashboard + backup
+docs/WINDOWS.md        running it on your PC: power, backups, updates, troubleshooting
+scripts/               backup.sh and restore.sh (run inside the backup container)
 src/papertrader/
   ingest/              data loading: one file per source, plus pipeline.py
   safety.py            the paper-only guard
@@ -580,7 +617,7 @@ src/papertrader/
   cli.py               the `papertrader` command
   db/                  tables, migrations, sessions
   scheduler/           the long-running service: the schedule, jobs, watchdog
-  dashboard/           Streamlit status page
+  dashboard/           Streamlit pages (read-only), queries and charts
   trading/             broker adapter (paper only), risk rules, engine, thesis checks
   notify/              message outbox, texts, Telegram sender and bot
   learning/            scoring past calls, agent weights, weekly lessons
