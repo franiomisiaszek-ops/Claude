@@ -463,7 +463,7 @@ class Settings(BaseSettings):
 
 
 class ConfigError(RuntimeError):
-    """config.yaml is missing or invalid."""
+    """A set-up problem a person must fix: config.yaml missing or invalid, database not set up."""
 
 
 def load_config(path: Path | str) -> AppConfig:

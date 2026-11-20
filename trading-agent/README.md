@@ -29,13 +29,18 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 | 6 | Telegram messages + bot commands | **done** (needs your test, see below) |
 | 7 | Learning loop + scheduler | **done** (runs by itself once the app is up, see below) |
 | 8 | Dashboard + deployment guide | **done** (see [docs/WINDOWS.md](docs/WINDOWS.md)) |
-| 9 | Run on paper for 4-8 weeks | not started |
+| 9 | Run on paper for 4-8 weeks | replaced by the three-way experiment |
+| X0-X6 | **Three-way experiment**: A (this system, frozen) vs B (better decisions) vs C (ETF trend portfolio), each on its own paper account | X0, X1 **done**; see [docs/EXPERIMENT.md](docs/EXPERIMENT.md) |
 
 Right now the program can load and refresh all its data, run the research agents and the
 judge, trade their decisions on the Alpaca paper account, send everything to you on
 Telegram, and run all of it by itself every trading day while the app is up. It scores
 its own past calls and learns from them each week. A dashboard shows all of it, and a
-backup is made every night. Next is the paper run itself (Phase 9).
+backup is made every night.
+
+Now three systems run side by side, each on its own Alpaca paper account, to find out
+which one (if any) makes money after costs: **[docs/EXPERIMENT.md](docs/EXPERIMENT.md)**
+(set-up steps, Telegram commands per system, the freeze rules).
 
 **Running it day to day (power settings, backups, updates, troubleshooting):
 [docs/WINDOWS.md](docs/WINDOWS.md).**
@@ -47,10 +52,12 @@ backup is made every night. Next is the paper run itself (Phase 9).
 | Hosting | Your own computer, with Docker |
 | Stocks | S&P 500 |
 | Frequency | One research cycle before the market opens; positions checked every 10 minutes |
-| Claude API budget | $100 per month, enforced in code |
+| Claude API budget | Per system, enforced in code: A $60, B $30, C $5 per month (`config/a.yaml`, `b.yaml`, `c.yaml`) |
 | Models | Judge: `claude-opus-5-5`. Research agents: `claude-sonnet-5-5` (changeable per agent) |
 
-All of these live in [`config.yaml`](config.yaml), with comments.
+All of these live in [`config.yaml`](config.yaml), with comments. During the experiment each
+system has its own copy in [`config/`](config/); `config.yaml` itself is used by the hub
+(Telegram) and the dashboard.
 
 ## Start it (Docker, Windows 10)
 
@@ -77,6 +84,9 @@ click the address bar, type `powershell` and press Enter.
    docker compose up -d --build
    ```
 
+   (The `app` service, system A, runs a frozen image you build once first:
+   [docs/EXPERIMENT.md](docs/EXPERIMENT.md), step 4.)
+
 4. Open the status page: <http://localhost:8501>
 
 Useful commands:
@@ -86,7 +96,7 @@ docker compose ps
 ```
 
 ```bash
-docker compose logs -f app
+docker compose logs -f app        # system A (app-b: B, hub: Telegram)
 ```
 
 ```bash
@@ -561,6 +571,8 @@ by accident. `papertrader check` shows which keys are present (names only, never
 | `FINNHUB_API_KEY` (optional) | Phase 2 | Free tier at finnhub.io |
 | `ANTHROPIC_API_KEY` | Phase 3 | console.anthropic.com |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Phase 6 | Telegram's @BotFather |
+| `ALPACA_B_API_KEY`, `ALPACA_B_SECRET_KEY` | Experiment (X1) | A second Alpaca **paper** account, for system B |
+| `ALPACA_C_API_KEY`, `ALPACA_C_SECRET_KEY` | Experiment (X4) | A third Alpaca **paper** account, for system C |
 
 ## Safety rules built in
 
@@ -604,9 +616,11 @@ Tests never touch the network and need no keys.
 
 ```
 config.yaml            behaviour: schedule, risk limits, models, budget (no secrets)
+config/                each experiment system's own settings: a.yaml (frozen), b.yaml, c.yaml
 .env.example           template for your private keys
-docker-compose.yml     db + app + dashboard + backup
+docker-compose.yml     db + app (A) + app-b + app-c + hub + dashboard + backup
 docs/WINDOWS.md        running it on your PC: power, backups, updates, troubleshooting
+docs/EXPERIMENT.md     the three-way experiment: set-up, commands, freeze rules
 scripts/               backup.sh and restore.sh (run inside the backup container)
 src/papertrader/
   ingest/              data loading: one file per source, plus pipeline.py
@@ -614,6 +628,8 @@ src/papertrader/
   config.py            reads and validates config.yaml and .env
   logging_setup.py     JSON logs
   runtime.py           startup checks
+  systems.py           the experiment's systems A, B, C and where each keeps its data
+  hub.py               one Telegram bot for all systems
   cli.py               the `papertrader` command
   db/                  tables, migrations, sessions
   scheduler/           the long-running service: the schedule, jobs, watchdog

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import signal
+import threading
 from datetime import timedelta
 from types import FrameType
 from zoneinfo import ZoneInfo
@@ -97,7 +98,10 @@ def build_scheduler(runtime: Runtime, jobs: Jobs | None = None) -> BlockingSched
 
 def start_bot(runtime: Runtime) -> BotThread | None:
     if not telegram_ready(runtime.settings, runtime.config):
-        log.info("telegram not configured: no messages will be sent")
+        if runtime.system != "A" or not runtime.config.telegram.enabled:
+            log.info("telegram is off in this system's config: the hub sends its messages")
+        else:
+            log.info("telegram not configured: no messages will be sent")
         return None
     bot = CommandBot(
         runtime.session_factory,
@@ -147,7 +151,13 @@ def run_hub(runtime: Runtime) -> None:
     settings = runtime.settings
     chat = str(settings.telegram_chat_id or "")
     if settings.telegram_bot_token is None or not chat:
-        raise SystemExit("The hub needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env.")
+        log.warning("telegram not configured: the hub has nothing to do. Add TELEGRAM_BOT_TOKEN "
+                    "and TELEGRAM_CHAT_ID to .env, then: docker compose restart hub")  # fmt: skip
+        idle = threading.Event()
+        signal.signal(signal.SIGTERM, lambda *_: idle.set())
+        signal.signal(signal.SIGINT, lambda *_: idle.set())
+        idle.wait()
+        return
     views = open_views(settings)
     log.info("hub started", extra={"systems": sorted(views)})
     telegram = runtime.config.telegram
@@ -155,7 +165,7 @@ def run_hub(runtime: Runtime) -> None:
     def send() -> None:
         client = make_client(settings)
         try:
-            for name, report in flush_all(views, client, chat, telegram).items():
+            for name, report in flush_all(dict(views), client, chat, telegram).items():
                 if report.sent or report.failed or report.dropped or report.setup_problem:
                     log.info("telegram outbox", extra={"system": name, "sent": report.sent, "failed": report.failed,
                                                        "dropped": report.dropped, "problem": report.setup_problem})  # fmt: skip
@@ -164,13 +174,12 @@ def run_hub(runtime: Runtime) -> None:
 
     def refresh() -> None:
         """Pick up B or C once they have been set up, without a restart."""
-        for name, view in open_views(settings).items():
-            if name not in views:
-                views[name] = view
-                bot.bots[name] = HubBot(
-                    {name: view}, bot.client, chat, settings, telegram=telegram
-                ).bots[name]
-                log.info("hub now serves another system", extra={"system": name})
+        for name, view in open_views(settings, skip=set(views)).items():
+            # Replace, never change, the dicts: the sender and the bot may be reading them.
+            bot.bots = {**bot.bots, **HubBot({name: view}, bot.client, chat, settings,
+                                             telegram=telegram).bots}  # fmt: skip
+            views[name] = view
+            log.info("hub now serves another system", extra={"system": name})
 
     bot = HubBot(views, make_client(settings), chat, settings, telegram=telegram)
     scheduler = BlockingScheduler(timezone=ZoneInfo(runtime.config.schedule.timezone))

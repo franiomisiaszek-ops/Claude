@@ -15,7 +15,7 @@ schedule:
   timezone: America/New_York
   ingest: "06:30"             # overnight news, filings, macro
   research_agents: "07:30"
-  score_and_judge: "08:20"    # pattern model + judge
+  score_and_judge: "08:25"    # 5 minutes after A: B judges a copy of A's research
   morning_brief: "08:45"      # Telegram
   place_orders: "09:35"       # never earlier than 09:35
   monitor_interval_minutes: 10

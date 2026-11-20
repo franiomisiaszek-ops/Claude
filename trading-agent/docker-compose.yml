@@ -1,13 +1,21 @@
-# Start everything:   docker compose up -d --build
-# Watch the logs:     docker compose logs -f app
+# Start everything:   docker compose up -d --build --remove-orphans
+# Watch the logs:     docker compose logs -f app app-b hub
 # Stop:               docker compose down        (your data is kept)
 #
-# Four services:
-#   db         PostgreSQL. Not reachable from outside Docker.
-#   app        The scheduler / trading service (PAPER trading only).
-#   dashboard  Read-only web page at http://localhost:8501 (this computer only).
+# The three-way experiment (see docs/EXPERIMENT.md):
+#   app        System A, the original system, FROZEN: it runs the image "papertrader:a-frozen"
+#              built once from the freeze commit (docs/EXPERIMENT.md says how), with
+#              config/a.yaml. Never rebuilt during the experiment. Loads the shared market data.
+#   app-b      System B: A's research plus a better decision layer, with config/b.yaml.
+#   app-c      System C: the weekly ETF trend portfolio. Switched on in phase X4.
+#   hub        The one Telegram bot for all systems: sends their messages tagged [A] [B] [C]
+#              and answers commands (/pnl B). Uses config.yaml.
+#   db         PostgreSQL. Not reachable from outside Docker. A, B and C each have their own
+#              tables in it (schemas public, sys_b, sys_c); the market data is shared.
+#   dashboard  Read-only web page at http://localhost:8501 (this computer only). System A.
 #   backup     One database + model backup a day into the "backups" folder
 #              (or BACKUP_DIR from .env, e.g. a OneDrive folder). See docs/WINDOWS.md.
+# All trading is PAPER trading on three separate Alpaca paper accounts.
 
 name: papertrader
 
@@ -18,28 +26,43 @@ x-logging: &logging
     max-size: "10m"
     max-file: "5"
 
-x-app: &app
-  build: .
-  image: papertrader:local
+x-env: &env
+  DATABASE_URL: postgresql+psycopg://papertrader:${POSTGRES_PASSWORD:-change-me}@db:5432/papertrader
+  PAPERTRADER_CONFIG: /app/config.yaml
+  DATA_DIR: /app/data
+  REPORTS_DIR: /app/reports
+  BACKUPS_DIR: /app/backups
+
+x-base: &base
   restart: unless-stopped
   logging: *logging
   env_file:
     - path: .env
       required: false
-  environment:
-    DATABASE_URL: postgresql+psycopg://papertrader:${POSTGRES_PASSWORD:-change-me}@db:5432/papertrader
-    PAPERTRADER_CONFIG: /app/config.yaml
-    DATA_DIR: /app/data
-    REPORTS_DIR: /app/reports
-    BACKUPS_DIR: /app/backups
+  environment: *env
   volumes:
     - ./config.yaml:/app/config.yaml:ro   # edit config.yaml, then: docker compose restart
+    - ./config:/app/config:ro             # the systems' own settings: a.yaml, b.yaml, c.yaml
     - appdata:/app/data
     - ./reports:/app/reports              # backtest reports appear in the "reports" folder
     - ${BACKUP_DIR:-./backups}:/app/backups:ro   # read-only: the app only checks backups are recent
   depends_on:
     db:
       condition: service_healthy
+
+x-app: &app
+  <<: *base
+  build: .
+  image: papertrader:local
+
+x-health: &health
+  # Healthy while this system's heartbeat in the database is fresh.
+  test: ["CMD", "python", "-m", "papertrader.healthcheck"]
+  interval: 60s
+  timeout: 10s
+  retries: 3
+  start_period: 30s
+  start_interval: 3s
 
 services:
   db:
@@ -58,17 +81,39 @@ services:
       timeout: 3s
       retries: 20
 
-  app:
-    <<: *app
+  app:   # system A, frozen
+    <<: *base
+    image: papertrader:a-frozen
+    pull_policy: never   # built on this computer from the freeze commit, never downloaded
+    environment:
+      <<: *env
+      SYSTEM: "A"
+      PAPERTRADER_CONFIG: /app/config/a.yaml
     command: ["papertrader", "run"]
-    healthcheck:
-      # Healthy while the heartbeat in the database is fresh.
-      test: ["CMD", "python", "-m", "papertrader.healthcheck"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-      start_interval: 3s
+    healthcheck: *health
+
+  app-b:
+    <<: *app
+    environment:
+      <<: *env
+      SYSTEM: "B"
+      PAPERTRADER_CONFIG: /app/config/b.yaml
+    command: ["papertrader", "run"]
+    healthcheck: *health
+
+  app-c:
+    <<: *app
+    profiles: ["c"]   # off until phase X4 builds system C
+    environment:
+      <<: *env
+      SYSTEM: "C"
+      PAPERTRADER_CONFIG: /app/config/c.yaml
+    command: ["papertrader", "run"]
+    healthcheck: *health
+
+  hub:
+    <<: *app
+    command: ["papertrader", "hub"]
 
   dashboard:
     <<: *app

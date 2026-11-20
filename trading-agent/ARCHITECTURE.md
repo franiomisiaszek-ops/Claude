@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phases 1-8)
+## What exists today (Phases 1-8, experiment X1)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -558,6 +558,42 @@ Known limits:
 - **Backups on the same disk** protect against mistakes, not a dead disk, unless
   `BACKUP_DIR` points at OneDrive or they are copied elsewhere.
 - **Restore is manual** and replaces everything after the backup.
+
+## The three-way experiment (X1)
+
+Three systems run side by side, each on its own Alpaca paper account
+([docs/EXPERIMENT.md](docs/EXPERIMENT.md) is the user guide):
+
+```
+                         one PostgreSQL database
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ public: market data (prices, news, filings, ...)  + A's own tables   │
+  │ sys_b:  B's own tables       sys_c: C's own tables                   │
+  └──────────────────────────────────────────────────────────────────────┘
+      ▲ writes market data       ▲ reads market data      ▲ reads market data
+  app (A, frozen image)       app-b (B)                app-c (C, from X4)
+      │ own paper account         │ own paper account        │ own paper account
+      └──────── outboxes ─────────┴──────────────────────────┘
+                                  ▼
+                hub: the one Telegram bot, tags [A] [B] [C]
+```
+
+| Piece | File | What it does |
+|---|---|---|
+| Systems | `systems.py` | The names A, B, C; which tables are shared market data and which every system has its own copy of; the frozen revision |
+| Per-system connections | `db/session.py` (`make_system_engine`) | B's PostgreSQL connections use `search_path=sys_b,public`: unqualified table names find B's own tables first and the shared market tables otherwise. On SQLite, B gets its own file with A's attached |
+| Provisioning | `db/provision.py` | Creates a system's own tables in its schema (`papertrader --system B db provision`, also done at start) and verifies them, so B can never fall through to A's decisions |
+| Keys and guard | `config.py`, `safety.py`, `runtime.py` | `ALPACA_B_*` / `ALPACA_C_*`; every system must be on the paper endpoint and no two may share a key |
+| Start-up order | `runtime.py` (`wait_for_shared_schema`) | Only A creates the shared tables; B, C and the hub wait for it, so they never race on a new database |
+| B reuses A's research | `research/reuse.py` | At 08:25 B copies A's finished agent reports into its own tables and runs its own judge. Allowed only while the agents' settings and prompts hash to the frozen fingerprint |
+| Per-system jobs | `scheduler/jobs.py` (`SYSTEM_JOBS`) | A runs everything. B runs judge, brief, orders, monitor, reconcile, scoring and weekly, but never loads market data and never retrains the pattern model. C's jobs arrive in X4 |
+| Hub | `hub.py`, `scheduler/service.py` (`run_hub`) | A Telegram bot can be read by only one program, so the systems only queue messages; the hub sends them all, tagged, and answers `/pnl B`-style commands |
+| Freeze tests | `tests/systems/test_freeze.py` | Fail if a migration is added, a shared table or column changes, or `config/a.yaml` changes |
+
+The freeze: A runs the Docker image `papertrader:a-frozen`, built once from commit
+`e54f521`, with `config/a.yaml`. Everything new goes into B or C. A shared table cannot
+gain a column (A's frozen code would not know it), so B's and C's new data gets new
+tables in their own schemas.
 
 ## Design rules
 

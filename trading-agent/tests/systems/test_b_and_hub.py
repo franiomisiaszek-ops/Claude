@@ -154,3 +154,20 @@ def test_the_hub_answers_for_one_or_all_systems(engine: Engine, b_engine: Engine
     )
     assert bot.handle("/status C") == "System C is not set up yet."
     assert "add A, B or C" in bot.handle("/help")
+
+
+def test_the_hub_finds_the_systems_that_are_set_up(engine: Engine, database_url: str) -> None:
+    from papertrader.config import Settings
+    from papertrader.hub import open_views
+
+    settings = Settings(database_url=database_url)
+    folder = PROJECT_ROOT / "config"
+    first = open_views(settings, folder)
+    assert sorted(first) == ["A"]  # B and C are not provisioned yet
+    b = make_system_engine(database_url, "B")
+    provision(b, "B")
+    later = open_views(settings, folder, skip=set(first))  # the hub's 10-minute refresh
+    assert sorted(later) == ["B"] and later["B"].config.budget.monthly_usd == 30
+    for view in (*first.values(), *later.values()):
+        view.engine.dispose()
+    b.dispose()

@@ -13,10 +13,11 @@ from typing import Any
 
 from sqlalchemy import Connection, Engine, inspect, text
 
+from papertrader.config import ConfigError
 from papertrader.systems import A_SCHEMA, SystemName, schema_name, system_tables
 
 
-class SchemaNotReadyError(RuntimeError):
+class SchemaNotReadyError(ConfigError):
     """A system's own tables are missing or different: run `papertrader db provision`."""
 
 

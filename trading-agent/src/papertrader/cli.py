@@ -77,6 +77,12 @@ def check() -> None:
     except (ConfigError, LiveTradingForbiddenError) as exc:
         raise _fail(str(exc)) from exc
 
+    from papertrader.systems import schema_name
+
+    own = (
+        f"own tables in {schema_name(runtime.system)}" if runtime.system != "A" else "the original"
+    )
+    typer.echo(f"System           : {runtime.system} ({own})")
     typer.echo(f"Trading endpoint : {ALPACA_PAPER_BASE_URL}  (PAPER only)")
     typer.echo(f"Universe         : {runtime.config.universe.index}")
     typer.echo(f"Monthly budget   : ${runtime.config.budget.monthly_usd:.2f}")
@@ -161,7 +167,7 @@ def hub() -> None:
     from papertrader.scheduler.service import run_hub
 
     try:
-        runtime = bootstrap(migrate=True, system="A")
+        runtime = bootstrap(migrate=True, system="A", owns_shared=False)
     except (ConfigError, LiveTradingForbiddenError) as exc:
         raise _fail(str(exc)) from exc
     run_hub(runtime)

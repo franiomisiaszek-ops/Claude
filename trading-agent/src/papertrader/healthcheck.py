@@ -1,30 +1,50 @@
-"""Container health check: exit 0 if the app's heartbeat is recent, 1 otherwise.
+"""Docker health check: healthy while this system's heartbeat in the database is fresh.
 
-Run as `python -m papertrader.healthcheck` (Docker does this every minute).
+Run as `python -m papertrader.healthcheck`. Exit code 0 = healthy, 1 = unhealthy.
 """
 
 from __future__ import annotations
 
 import sys
+from datetime import datetime
+
+from sqlalchemy.orm import Session
 
 from papertrader.config import get_settings
-from papertrader.dashboard.data import load_status
-from papertrader.db.session import make_engine
+from papertrader.db.provision import SchemaNotReadyError, verify
+from papertrader.db.session import make_system_engine
+from papertrader.db.state import HEARTBEAT_KEY, get_state
+from papertrader.db.types import utcnow
+from papertrader.systems import check_system
+
+STALE_SECONDS = 180
 
 
 def main() -> int:
-    engine = make_engine(get_settings().database_url, read_only=True)
+    settings = get_settings()
+    system = check_system(settings.system)
+    engine = make_system_engine(settings.database_url, system, read_only=True)
     try:
-        status = load_status(engine)
+        if system != "A":
+            verify(engine, system)
+        with Session(engine) as session:
+            heartbeat = get_state(session, HEARTBEAT_KEY)
+    except SchemaNotReadyError as exc:
+        print(f"unhealthy: {exc}")
+        return 1
     except Exception as exc:
         print(f"unhealthy: database not reachable: {exc}")
         return 1
     finally:
         engine.dispose()
-    if not status.app_alive:
-        print(f"unhealthy: last heartbeat {status.heartbeat_age_seconds}s ago")
+    if not heartbeat:
+        print("unhealthy: no heartbeat yet")
         return 1
-    print("healthy")
+    age = (utcnow() - datetime.fromisoformat(heartbeat["at"])).total_seconds()
+    if age > STALE_SECONDS:
+        print(f"unhealthy: last heartbeat {age:.0f}s ago")
+        return 1
+    print(f"healthy ({system})")
     return 0
 
 

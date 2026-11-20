@@ -76,7 +76,8 @@ You have done most of this already. For a new PC, or to check:
 
 6. **Your keys**: `copy .env.example .env`, then fill in `.env` with Notepad (README,
    section "Your keys"). Change `POSTGRES_PASSWORD` *before* the first start.
-7. **Start**:
+7. **Start**. First build system A's frozen image ([EXPERIMENT.md](EXPERIMENT.md),
+   step 4), then:
 
    ```bash
    docker compose up -d --build
@@ -195,7 +196,7 @@ on its next check).
 1. Stop the app and the dashboard:
 
    ```bash
-   docker compose stop app dashboard
+   docker compose stop app app-b hub dashboard
    ```
 
 2. See which backups exist:
@@ -215,7 +216,7 @@ on its next check).
 4. Start again:
 
    ```bash
-   docker compose start app dashboard
+   docker compose start app app-b hub dashboard
    ```
 
 **On a new PC:** do the first setup (section 2) with the same `.env`, start once,
@@ -239,7 +240,9 @@ weekend.
    ```
 
 3. Rebuild and restart. Database changes, if any, are applied automatically when the
-   app starts:
+   app starts. (During the three-way experiment this rebuilds B, C, the hub and the
+   dashboard only; system A keeps running its frozen image. See
+   [EXPERIMENT.md](EXPERIMENT.md).)
 
    ```bash
    docker compose up -d --build
@@ -272,6 +275,8 @@ git checkout a4b1cfe
 docker compose up -d --build
 ```
 
+During the experiment, do not go back to a version from before 20 Nov 2026 this way:
+the old `docker-compose.yml` knows nothing about B, C and the hub.
 If `docker compose logs app` showed "migrating" during the update, also restore the
 backup from step 1 (section 6). Later, to return to the newest version:
 `git checkout claude/intelligent-lamport-g6gwc7`, then `git pull` and step 3.

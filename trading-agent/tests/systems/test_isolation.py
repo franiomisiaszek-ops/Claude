@@ -120,7 +120,7 @@ def test_each_system_needs_its_own_paper_account() -> None:
 def test_bootstrap_for_b_creates_and_checks_its_tables(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from papertrader.runtime import bootstrap
+    from papertrader.runtime import SharedSchemaNotReadyError, bootstrap
 
     shutil.copy(PROJECT_ROOT / "config.yaml", tmp_path / "config.yaml")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'app.db'}")
@@ -132,6 +132,9 @@ def test_bootstrap_for_b_creates_and_checks_its_tables(
     from papertrader import config as config_module
 
     config_module.get_settings.cache_clear()
+    with pytest.raises(SharedSchemaNotReadyError, match="Start system A first"):
+        bootstrap(system="B", migrate=True, wait_seconds=0)  # only A creates the shared tables
+    bootstrap(system="A", migrate=True).engine.dispose()
     runtime = bootstrap(system="B", migrate=True)
     assert (
         runtime.system == "B"
@@ -141,3 +144,19 @@ def test_bootstrap_for_b_creates_and_checks_its_tables(
     verify(runtime.engine, "B")
     assert runtime.settings.alpaca_keys("B")[0] is not None
     runtime.engine.dispose()
+
+
+def test_b_waits_for_a_to_set_up_the_shared_tables(tmp_path: Path) -> None:
+    from papertrader.db.migrate import upgrade_to_head
+    from papertrader.runtime import wait_for_shared_schema
+
+    url = f"sqlite:///{tmp_path / 'app.db'}"
+    naps: list[float] = []
+
+    def nap(seconds: float) -> None:  # system A starts while B waits
+        naps.append(seconds)
+        if len(naps) == 2:
+            upgrade_to_head(url)
+
+    wait_for_shared_schema(url, 60, poll=5, sleep=nap, clock=lambda: 5.0 * len(naps))
+    assert naps == [5, 5]

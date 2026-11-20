@@ -9,7 +9,7 @@ data, apart from marking messages as sent and the pause / resume switches.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -54,10 +54,14 @@ def config_path(name: SystemName, fallback: Path, folder: Path = Path("config"))
     return path if path.exists() else fallback
 
 
-def open_views(settings: Settings, folder: Path = Path("config")) -> dict[SystemName, SystemView]:
+def open_views(
+    settings: Settings, folder: Path = Path("config"), skip: Collection[str] = ()
+) -> dict[SystemName, SystemView]:
     """All systems whose tables exist. B and C are left out until they are provisioned."""
     views: dict[SystemName, SystemView] = {}
     for name in SYSTEMS:
+        if name in skip:
+            continue
         engine = make_system_engine(settings.database_url, name)
         try:
             verify(engine, name)

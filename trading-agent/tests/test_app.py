@@ -145,3 +145,22 @@ def test_healthcheck_follows_the_heartbeat(project: Path) -> None:
     beat(runtime.session_factory)
     assert main() == 0
     runtime.engine.dispose()
+
+
+def test_healthcheck_of_system_b(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from papertrader.config import get_settings
+    from papertrader.healthcheck import main
+
+    monkeypatch.setenv("SYSTEM", "B")
+    monkeypatch.setenv("ALPACA_B_API_KEY", "PKBTESTKEY0000000001")
+    monkeypatch.setenv("ALPACA_B_SECRET_KEY", "b-secret")
+    get_settings.cache_clear()
+    assert main() == 1  # B's tables do not exist yet
+    bootstrap(migrate=True, system="A").engine.dispose()  # A sets up the shared tables
+    runtime = bootstrap(migrate=True)
+    assert runtime.system == "B"
+    assert main() == 1  # no heartbeat yet
+    beat(runtime.session_factory)
+    assert main() == 0
+    runtime.engine.dispose()
+    get_settings.cache_clear()

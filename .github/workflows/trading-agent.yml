@@ -61,19 +61,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the freeze commit is needed to build system A's image
+      - name: Build system A's frozen image, as in docs/EXPERIMENT.md
+        run: |
+          git worktree add ../../papertrader-a-frozen e54f521
+          docker build -t papertrader:a-frozen ../../papertrader-a-frozen/trading-agent
+          git worktree remove ../../papertrader-a-frozen
       - name: Build and start all services
-        run: docker compose up -d --build --wait --wait-timeout 180
-      - name: Startup checks inside the app container
-        run: docker compose exec -T app papertrader check
+        run: docker compose up -d --build --wait --wait-timeout 240
+      - name: Startup checks inside the app containers
+        run: |
+          docker compose exec -T app papertrader check
+          docker compose exec -T app-b papertrader check
       - name: Backup and restore inside the containers
         run: |
           docker compose exec -T backup sh /scripts/backup.sh now
           dump=$(docker compose exec -T backup sh -c 'ls -1 /backups/papertrader-*.dump | tail -n 1' | tr -d '\r')
           echo "restoring $dump"
-          docker compose stop app dashboard
+          docker compose stop app app-b hub dashboard
           docker compose exec -T backup sh /scripts/restore.sh "$dump" --yes
-          docker compose start app dashboard
+          docker compose start app app-b hub dashboard
           docker compose exec -T app papertrader check
+          docker compose exec -T app-b papertrader check
       - name: Show logs on failure
         if: failure()
         run: docker compose logs --no-color
