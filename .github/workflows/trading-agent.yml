@@ -39,7 +39,7 @@ jobs:
           --health-retries 20
     env:
       # Makes the database tests run on PostgreSQL as well as SQLite.
-      TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/test
+      TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/test  # secret-scanner: allow (throwaway CI database)
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
