@@ -32,6 +32,30 @@ jobs_app = typer.Typer(no_args_is_help=True, help="The daily schedule: see it, r
 app.add_typer(jobs_app, name="jobs")
 
 
+@app.callback()
+def _choose_system(
+    system: Annotated[
+        str | None,
+        typer.Option(
+            "--system",
+            help="Which system of the experiment: A, B or C (default: SYSTEM in .env, else A).",
+        ),
+    ] = None,
+) -> None:
+    """Multi-agent research and PAPER trading experiment. Never trades real money."""
+    if system is not None:
+        import os
+
+        from papertrader import config as config_module
+        from papertrader.systems import UnknownSystemError, check_system
+
+        try:
+            os.environ["SYSTEM"] = check_system(system)
+        except UnknownSystemError as exc:
+            raise _fail(str(exc)) from exc
+        config_module.get_settings.cache_clear()
+
+
 def _fail(message: str) -> typer.Exit:
     typer.secho(message, fg=typer.colors.RED, err=True)
     return typer.Exit(code=1)
@@ -74,7 +98,7 @@ def check() -> None:
     for name, present in runtime.settings.secret_status().items():
         typer.echo(f"  {'set    ' if present else 'MISSING'}  {name}")
 
-    if runtime.settings.alpaca_api_key and runtime.settings.alpaca_secret_key:
+    if all(runtime.settings.alpaca_keys(runtime.system)):
         from papertrader.scheduler.jobs import Jobs
 
         offset = Jobs(runtime).clock_offset()
@@ -86,6 +110,24 @@ def check() -> None:
             typer.secho(f"Clock            : {offset:+.0f} s off Alpaca's clock. Restart Docker Desktop and "
                         "sync the Windows clock (Settings > Time > Sync now).", fg=typer.colors.YELLOW)  # fmt: skip
     typer.secho("OK", fg=typer.colors.GREEN)
+
+
+@db_app.command("provision")
+def db_provision() -> None:
+    """Create the own tables of system B or C (use with --system B or --system C)."""
+    from papertrader.db.provision import provision
+    from papertrader.runtime import bootstrap
+
+    try:
+        runtime = bootstrap(migrate=True, log_format="console")
+    except (ConfigError, LiveTradingForbiddenError) as exc:
+        raise _fail(str(exc)) from exc
+    if runtime.system == "A":
+        typer.echo("System A's tables are created by `papertrader db upgrade` (done).")
+        return
+    created = provision(runtime.engine, runtime.system)
+    typer.echo(f"System {runtime.system}: {len(created)} table(s) created" if created
+               else f"System {runtime.system}: all tables are ready.")  # fmt: skip
 
 
 @db_app.command("upgrade")
@@ -356,11 +398,14 @@ def _trading() -> tuple[Any, Any]:
     except (ConfigError, LiveTradingForbiddenError) as exc:
         raise _fail(str(exc)) from exc
     settings = runtime.settings
-    if not (settings.alpaca_api_key and settings.alpaca_secret_key):
-        raise _fail("ALPACA_API_KEY and ALPACA_SECRET_KEY (paper account) are not set in .env.")
+    key, secret = settings.alpaca_keys(runtime.system)
+    if not (key and secret):
+        names = {"A": "ALPACA_API_KEY and ALPACA_SECRET_KEY", "B": "ALPACA_B_API_KEY and ALPACA_B_SECRET_KEY",
+                 "C": "ALPACA_C_API_KEY and ALPACA_C_SECRET_KEY"}[runtime.system]  # fmt: skip
+        raise _fail(f"{names} (paper account) are not set in .env.")
     try:
         broker = AlpacaPaperBroker(
-            settings.alpaca_api_key.get_secret_value(), settings.alpaca_secret_key.get_secret_value(),
+            key.get_secret_value(), secret.get_secret_value(),
             live_feed=runtime.config.trading.live_feed,
         )  # fmt: skip
     except (LiveTradingForbiddenError, BrokerError) as exc:
@@ -838,7 +883,7 @@ def telegram_listen() -> None:
 
     runtime, client = _telegram()
     bot = CommandBot(runtime.session_factory, runtime.config, client, str(runtime.settings.telegram_chat_id),
-                     broker=make_broker_factory(runtime.settings, runtime.config))  # fmt: skip
+                     broker=make_broker_factory(runtime.settings, runtime.config, runtime.system))  # fmt: skip
     typer.echo("Listening. Send /help to your bot. Ctrl+C to stop.")
     try:
         while True:

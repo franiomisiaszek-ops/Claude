@@ -104,7 +104,7 @@ def start_bot(runtime: Runtime) -> BotThread | None:
         runtime.config,
         make_client(runtime.settings),
         str(runtime.settings.telegram_chat_id),
-        broker=make_broker_factory(runtime.settings, runtime.config),
+        broker=make_broker_factory(runtime.settings, runtime.config, runtime.system),
     )
     thread = BotThread(bot)
     thread.start()

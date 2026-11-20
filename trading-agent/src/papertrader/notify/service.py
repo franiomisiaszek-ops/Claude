@@ -27,18 +27,20 @@ def make_client(settings: Settings) -> TelegramClient:
     return TelegramClient(settings.telegram_bot_token.get_secret_value())
 
 
-def make_broker_factory(settings: Settings, config: AppConfig) -> Callable[[], Broker | None]:
-    """The bot only needs the broker for /positions and /pnl; create it on first use."""
+def make_broker_factory(
+    settings: Settings, config: AppConfig, system: str | None = None
+) -> Callable[[], Broker | None]:
+    """The paper account of one system, created on first use."""
     cache: dict[str, Broker] = {}
 
     def factory() -> Broker | None:
         if "broker" not in cache:
-            if not (settings.alpaca_api_key and settings.alpaca_secret_key):
+            key, secret = settings.alpaca_keys(system)
+            if not (key and secret):
                 return None
             from papertrader.trading.broker import AlpacaPaperBroker
 
-            cache["broker"] = AlpacaPaperBroker(settings.alpaca_api_key.get_secret_value(),
-                                                settings.alpaca_secret_key.get_secret_value(),
+            cache["broker"] = AlpacaPaperBroker(key.get_secret_value(), secret.get_secret_value(),
                                                 live_feed=config.trading.live_feed)  # fmt: skip
         return cache["broker"]
 

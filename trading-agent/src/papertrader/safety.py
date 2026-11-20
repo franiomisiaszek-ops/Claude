@@ -77,3 +77,22 @@ def assert_paper_only(
             "Refusing to run: ALPACA_API_KEY looks like a LIVE account key (starts with "
             "'AK'). Use the keys from your Alpaca PAPER account (they start with 'PK')."
         )
+
+
+def assert_distinct_paper_keys(keys: Mapping[str, str | None]) -> None:
+    """The three systems must trade three different PAPER accounts.
+
+    `keys` maps a system name to its Alpaca API key (or None when not set yet).
+    """
+    seen: dict[str, str] = {}
+    for system, key in keys.items():
+        if not key:
+            continue
+        assert_paper_only(ALPACA_PAPER_BASE_URL, api_key=key, environ={})
+        other = seen.get(key.strip())
+        if other is not None:
+            raise LiveTradingForbiddenError(
+                f"Refusing to run: systems {other} and {system} use the same Alpaca key. Each "
+                "system needs its own paper account, or their trades would mix."
+            )
+        seen[key.strip()] = system

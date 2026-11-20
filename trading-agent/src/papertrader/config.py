@@ -402,6 +402,12 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     alpaca_api_key: SecretStr | None = None
     alpaca_secret_key: SecretStr | None = None
+    # The experiment: which system this process runs, and the paper accounts of B and C.
+    system: Literal["A", "B", "C"] = "A"
+    alpaca_b_api_key: SecretStr | None = None
+    alpaca_b_secret_key: SecretStr | None = None
+    alpaca_c_api_key: SecretStr | None = None
+    alpaca_c_secret_key: SecretStr | None = None
     telegram_bot_token: SecretStr | None = None
     telegram_chat_id: str | None = None
     finnhub_api_key: SecretStr | None = None
@@ -425,12 +431,25 @@ class Settings(BaseSettings):
             return cls.model_fields[info.field_name].default
         return value
 
+    def alpaca_keys(self, system: str | None = None) -> tuple[SecretStr | None, SecretStr | None]:
+        """(API key, secret key) of a system's own Alpaca paper account."""
+        name = (system or self.system).upper()
+        if name == "B":
+            return self.alpaca_b_api_key, self.alpaca_b_secret_key
+        if name == "C":
+            return self.alpaca_c_api_key, self.alpaca_c_secret_key
+        return self.alpaca_api_key, self.alpaca_secret_key
+
     def secret_status(self) -> dict[str, bool]:
         """Which keys are present - names only, never values. Safe to log."""
         names = (
             "anthropic_api_key",
             "alpaca_api_key",
             "alpaca_secret_key",
+            "alpaca_b_api_key",
+            "alpaca_b_secret_key",
+            "alpaca_c_api_key",
+            "alpaca_c_secret_key",
             "telegram_bot_token",
             "telegram_chat_id",
             "finnhub_api_key",

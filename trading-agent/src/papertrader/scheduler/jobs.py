@@ -97,7 +97,9 @@ class Jobs:
         self.runtime = runtime
         self.config = runtime.config
         self.sessions = runtime.session_factory
-        self._broker = broker or make_broker_factory(runtime.settings, runtime.config)
+        self._broker = broker or make_broker_factory(
+            runtime.settings, runtime.config, runtime.system
+        )
         self._anthropic = anthropic or self._default_anthropic
         self.now = now
         self.sleep = sleep

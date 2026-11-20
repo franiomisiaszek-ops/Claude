@@ -22,7 +22,8 @@ _ENV_VARS = (
     "ANTHROPIC_API_KEY", "ALPACA_API_KEY", "ALPACA_SECRET_KEY", "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID", "FINNHUB_API_KEY", "FRED_API_KEY", "SEC_USER_AGENT", "DATABASE_URL",
     "PAPERTRADER_CONFIG", "DATA_DIR", "LOG_LEVEL", "LOG_FORMAT",
-    "APCA_API_BASE_URL", "ALPACA_BASE_URL", "ALPACA_API_BASE_URL",
+    "APCA_API_BASE_URL", "ALPACA_BASE_URL", "ALPACA_API_BASE_URL", "SYSTEM",
+    "ALPACA_B_API_KEY", "ALPACA_B_SECRET_KEY", "ALPACA_C_API_KEY", "ALPACA_C_SECRET_KEY", "BACKUPS_DIR",
 )  # fmt: skip
 
 
@@ -62,6 +63,8 @@ def database_url(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[str
         with engine.begin() as conn:
             conn.execute(text("DROP SCHEMA public CASCADE"))
             conn.execute(text("CREATE SCHEMA public"))
+            for schema in ("sys_b", "sys_c"):  # systems B and C of the experiment
+                conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
 
     _reset()
     yield url
