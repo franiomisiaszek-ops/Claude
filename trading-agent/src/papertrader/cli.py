@@ -1266,3 +1266,52 @@ def paid_data_check(ticker: str = "AAPL") -> None:
                 typer.secho(f"FMP OK: {ticker}: {grades.summary()}", fg=typer.colors.GREEN)
             except paid.PaidDataError as exc:
                 typer.secho(f"FMP problem: {exc}", fg=typer.colors.RED)
+
+
+@app.command()
+def scanner(days: int = 30) -> None:
+    """System B: today's intraday plans and the scanner's track record (shadow and live)."""
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from papertrader.b.models import IntradayPlan
+    from papertrader.b.scanner import results
+    from papertrader.db.types import utcnow
+    from papertrader.ingest.timeutil import NEW_YORK, new_york_date
+
+    runtime = _system_b()
+    cfg = runtime.config.decision.intraday
+    typer.echo(f"Scanner: {'ON' if cfg.enabled else 'off'}, mode {cfg.mode}, every {cfg.interval_minutes} minutes "
+               f"{cfg.start:%H:%M}-{cfg.end:%H:%M} New York")  # fmt: skip
+    today = new_york_date(utcnow())
+    with runtime.session_factory() as session:
+        plans = session.scalars(
+            select(IntradayPlan).where(IntradayPlan.day == today).order_by(IntradayPlan.id)
+        ).all()
+        record = results(session, today - timedelta(days=days))
+    typer.echo(f"Today: {len(plans)} plan(s)")
+    for p in plans:
+        result = (
+            f", result {p.net_return_pct:+.2%} ({p.exit_reason})"
+            if p.net_return_pct is not None
+            else ""
+        )
+        typer.echo(f"  {p.created_at.astimezone(NEW_YORK):%H:%M} {p.ticker:<6} {p.rule:<9} {p.status:<8} "
+                   f"conf {p.confidence:.0%}{result}{' - ' + p.note if p.note else ''}")  # fmt: skip
+    typer.echo(f"Last {days} days:")
+    for mode, r in record.items():
+        if not r["plans"]:
+            continue
+        average = f"{r['average_net']:+.2%}" if r["average_net"] is not None else "n/a"
+        gap = (
+            f"{r['median_feed_gap_bps']:.1f} bps"
+            if r["median_feed_gap_bps"] is not None
+            else "not measured yet"
+        )
+        typer.echo(f"  {mode}: {r['plans']} plans, {r['traded']} would have filled/filled, {r['wins']} won, "
+                   f"average {average} after costs, total {r['sum_net']:+.2%}; live-feed price gap {gap}")  # fmt: skip
+    typer.echo(
+        "Live feed: IEX (free). A median gap above 5 bps, or many plans that do not fill, "
+        "would make the $99/month SIP feed worth considering."
+    )

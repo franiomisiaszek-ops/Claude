@@ -47,6 +47,10 @@ def test_switches_and_the_insider_backtest_from_the_command_line(project: Path) 
     )
     checked = runner.invoke(app, ["--system", "B", "paid-data-check"])
     assert "nothing to check (and nothing is paid for)" in checked.output
+    scanned = runner.invoke(app, ["--system", "B", "scanner"])
+    assert scanned.exit_code == 0, scanned.output
+    assert "Scanner: ON, mode shadow, every 5 minutes 09:45-15:30 New York" in scanned.output
+    assert "Today: 0 plan(s)" in scanned.output
 
 
 def ideas(n: int, rule: str) -> list[Resolved]:

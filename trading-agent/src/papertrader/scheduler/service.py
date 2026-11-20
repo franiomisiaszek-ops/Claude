@@ -55,10 +55,11 @@ def add_schedule(scheduler: BlockingScheduler, runtime: Runtime, jobs: Jobs) -> 
     tz = ZoneInfo(cfg.timezone)
     grace = cfg.heartbeat_grace_minutes * 60
     for spec in jobs.specs:
-        if spec.at is None:  # the monitor: every N minutes; it checks the market hours itself
-            offset = cfg.place_orders.minute % cfg.monitor_interval_minutes
+        if spec.at is None:  # repeats every N minutes; the job checks the market hours itself
+            every = spec.every(runtime.config) if spec.every else cfg.monitor_interval_minutes
+            offset = cfg.place_orders.minute % every
             trigger = CronTrigger(day_of_week="mon-fri", hour="9-15",
-                                  minute=f"{offset}-59/{cfg.monitor_interval_minutes}", timezone=tz)  # fmt: skip
+                                  minute=f"{offset}-59/{every}", timezone=tz)  # fmt: skip
         else:
             at = spec.at(runtime.config)
             days = cfg.weekly_day if spec.weekly else "mon-fri"

@@ -145,3 +145,51 @@ class Backtest(BBase):
     params: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     result: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     verdict: Mapped[str] = mapped_column(Text)
+
+
+class IntradayPlan(BBase):
+    """One trade the intraday scanner decided on (X2b), from the alert to the result.
+
+    status: shadow (scored but never placed) | planned (waiting out the /skip window) |
+    skipped | placed | refused (a risk check or the price said no at placing time) |
+    expired | done. Real trades are tagged by `idea_id` / `trade_id`.
+    """
+
+    __tablename__ = "b_intraday_plans"
+
+    id: Mapped[int] = _pk()
+    day: Mapped[date] = mapped_column(Date, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    mode: Mapped[str] = mapped_column(String(8))  # shadow | live
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    rule: Mapped[str] = mapped_column(String(32))  # which cheap rule found it
+    facts: Mapped[dict[str, Any]] = mapped_column(
+        JSONType, default=dict
+    )  # the numbers behind the rule
+    price_at_decision: Mapped[float] = mapped_column(Float)  # the live (IEX) price then
+    entry_low: Mapped[float] = mapped_column(Float)
+    entry_high: Mapped[float] = mapped_column(Float)
+    target_price: Mapped[float] = mapped_column(Float)
+    stop_price: Mapped[float] = mapped_column(Float)
+    size_pct: Mapped[float] = mapped_column(Float)
+    confidence: Mapped[float] = mapped_column(Float)
+    expected_hold_minutes: Mapped[int] = mapped_column(Integer)
+    time_stop_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    place_after: Mapped[datetime] = mapped_column(UTCDateTime)
+    why: Mapped[str] = mapped_column(Text)
+    invalidation: Mapped[str] = mapped_column(Text, default="")
+    note: Mapped[str] = mapped_column(Text, default="")  # why skipped / refused / expired
+    idea_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    trade_id: Mapped[int | None] = mapped_column(Integer)
+    qty: Mapped[int | None] = mapped_column(Integer)
+    # The result, for live trades from the account and for shadow plans from minute bars.
+    entry_price: Mapped[float | None] = mapped_column(Float)
+    entered_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    exit_price: Mapped[float | None] = mapped_column(Float)
+    exited_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    exit_reason: Mapped[str | None] = mapped_column(String(16))  # target | stop | time | no_fill
+    net_return_pct: Mapped[float | None] = mapped_column(Float)  # after costs
+    feed_gap_bps: Mapped[float | None] = mapped_column(
+        Float
+    )  # live (IEX) price vs the full market's

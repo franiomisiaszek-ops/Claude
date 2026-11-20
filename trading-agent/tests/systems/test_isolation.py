@@ -61,7 +61,7 @@ def test_the_split_between_shared_and_own_tables() -> None:
     )
     only_b = {t.name for t in own_tables("B")} - names
     assert only_b == {"b_decision_log", "b_signals", "b_calibrations", "b_shadow_reports",
-                      "b_backtests"} and not ({t.name for t in own_tables("C")} - names)  # fmt: skip
+                      "b_backtests", "b_intraday_plans"} and not ({t.name for t in own_tables("C")} - names)  # fmt: skip
     assert check_system("b") == "B"
     with pytest.raises(UnknownSystemError):
         check_system("D")

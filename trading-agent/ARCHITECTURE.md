@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phases 1-8, experiment X1-X2)
+## What exists today (Phases 1-8, experiment X1-X2b)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -621,6 +621,29 @@ A's reports (copied) --prepare--> judge (Opus) --apply--> B's trade ideas --> or
 | Backtest | `b/backtest.py` | Replays the insider rule without look-ahead; month-block bootstrap; verdict rule fixed in advance |
 | Meta-labelling | `b/meta.py` | Regularised logistic regression; used only if it beats the blend and the base rate on the newest ideas |
 | The Fable test | `b/daily.py` (`run_fable`, `score_shadow`, `fable_comparison`) | Chosen agents re-run on Fable from B's copy of the day, never traded; own budget through `CostGovernor(only=...)`, excluded from B's main budget |
+
+## System B's intraday scanner (X2b)
+
+`b/scanner.py`, run by the `intraday` job every `interval_minutes` during market hours
+(a repeating job like the monitor: `JobSpec.every`).
+
+```
+live quotes (IEX snapshot, whole universe) --rules--> candidates (free)
+   --Haiku screen--> picks --Sonnet decision--> code checks --> b_intraday_plans + Telegram alert
+live mode:   after the /skip window: price still in the zone? limits? day-trade rule?
+             --> intraday DecisionCycle + TradeIdea --> TradingEngine.place_orders (same risk checks)
+             time stop from the expected holding time --> TradingEngine.exit_trade(TIME)
+shadow mode: nothing placed; after the close, simulate() on the full market's 1-minute bars
+both:        feed_gap_bps = the IEX price used vs the full market's at that minute
+```
+
+| Piece | File | What it does |
+|---|---|---|
+| Live data | `b/live.py` | Alpaca snapshots, minute bars (IEX live, SIP for scoring) and headlines; never written to the shared tables |
+| Rules, plans, scoring | `b/scanner.py` | Day facts from the shared daily bars, the three rules, budget caps from `api_usage`, plan checks, sizing, `add_market_minutes`, `place_due`, `manage_open`, `simulate`, `score_plans`, `results` |
+| Plans | `b/models.py` (`IntradayPlan`) | One row per plan from alert to result; real trades tagged through `idea_id` / `trade_id` |
+| /skip | `hub.py` | Handled before the system argument is read (A and C are also tickers) |
+| Day-trade rule | `trading/broker.py` (`Account.daytrade_count`) | Read from Alpaca; no new intraday trade with 3 day trades on an account under $25,000 |
 
 ## Design rules
 

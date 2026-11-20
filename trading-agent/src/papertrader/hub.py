@@ -37,6 +37,7 @@ HUB_HELP = (
     .replace("/pause [reason]", "/pause A|B|C [reason]", 1)
     .replace("/resume -", "/resume A|B|C -", 1)
     + "\nWithout a system, /status /positions /pnl /brief answer for all three."
+    + "\n/skip TICKER - cancel system B's planned intraday trade before it is placed"
 )
 
 
@@ -157,6 +158,8 @@ class HubBot:
         parts = text.split()
         command = parts[0].split("@")[0].lower()
         args = parts[1:]
+        if command == "/skip":  # before the system is read: A and C are also tickers
+            return self.skip(args)
         system = args[0].upper() if args and args[0].upper() in SYSTEMS else None
         rest = " ".join(args[1:] if system else args)
         if command in ("/start", "/help"):
@@ -171,3 +174,14 @@ class HubBot:
             names = [system] if system else list(self.bots)
             return "\n\n".join(f"{tag(n)} " + self.bots[n].handle(command) for n in names)
         return f"Unknown command {command}.\n\n{HUB_HELP}"
+
+    def skip(self, args: list[str]) -> str:
+        from papertrader.b.scanner import skip
+
+        if args and len(args) == 2 and args[0].upper() == "B":
+            args = args[1:]
+        if len(args) != 1:
+            return "Say which stock: /skip NVDA"
+        if "B" not in self.views:
+            return "System B is not set up yet."
+        return f"{tag('B')} " + skip(self.views["B"].sessions, args[0], self.now())

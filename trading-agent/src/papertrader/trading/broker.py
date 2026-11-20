@@ -52,6 +52,7 @@ class Account:
     cash: float
     status: str
     trading_blocked: bool
+    daytrade_count: int | None = None  # day trades in the last 5 trading days (US day-trading rule)
 
     @property
     def day_change_pct(self) -> float:
@@ -205,6 +206,7 @@ class AlpacaPaperBroker:
             equity=_float(raw.get("equity")) or 0.0, last_equity=_float(raw.get("last_equity")) or 0.0,
             cash=_float(raw.get("cash")) or 0.0, status=str(raw.get("status")),
             trading_blocked=bool(raw.get("trading_blocked") or raw.get("account_blocked")),
+            daytrade_count=int(raw["daytrade_count"]) if raw.get("daytrade_count") is not None else None,
         )  # fmt: skip
 
     def clock(self) -> Clock:

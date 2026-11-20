@@ -20,8 +20,8 @@ points at the paper endpoint, and they refuse to start if two systems share a ke
 |---|---|---|
 | X0 | Claude Code helper pool (`.claude/` folder, used while building, never by the running program) | done |
 | X1 | Separate systems: own database sections, own paper accounts, own budgets; one Telegram hub | done |
-| X2 | B's better decision layer: ten switches, extra signals, the Fable test (see below) | **done** |
-| X2b | B's intraday scanner (shadow mode first) | not started |
+| X2 | B's better decision layer: ten switches, extra signals, the Fable test (see below) | done |
+| X2b | B's intraday scanner (see below; shadow mode first) | **done** |
 | X2c | B's post-mortems ("why did it move?") | not started |
 | X3 | Measurement: the pre-registered test and the comparison page | not started |
 | X4 | System C: 20-year backtest first, then the weekly ETF portfolio (plan below) | not started |
@@ -97,6 +97,69 @@ they are scored the same way as the real ones, so after a few months we can see 
 the stronger model's calls are more often right. It has its own budget of $10 a month,
 separate from B's $30. To switch it on, set `decision: fable_shadow: enabled: true` in
 `config/b.yaml`, then `docker compose restart app-b`.
+
+## B's intraday scanner (phase X2b)
+
+Besides its morning decision, B now watches the market during the day and tells you
+before it buys.
+
+**How it works.** Every 5 minutes from 09:45 to 15:30 New York time (15:45 to 21:30 in
+Poland):
+
+1. Simple rules check live prices for the whole S&P 500, at no cost: a stock breaking
+   above its 20-day high on heavy volume, a big move up on heavy volume near the day's
+   high, or a sharp dip inside an uptrend that is already bouncing.
+2. The best few go to a quick, cheap screen (Claude Haiku) that passes on most of them.
+3. The rest go to a decision (Claude Sonnet): buy or not, at what price, where the stop
+   and the target are, how long the move should take, how confident it is, and why.
+   The program then checks the plan (prices close to the market, a reward at least 1.5x
+   the risk, a stop outside the stock's normal noise) and sizes it so a stop-out loses at
+   most 1% of the account.
+4. You get a Telegram message, for example:
+
+   ```
+   [B] PLANNED BUY · NVDA (intraday scanner)
+   Buy 12 shares (about $1,574, 6.3% of the account), limit $131.20 (zone $130.60-$131.20)
+   Target $135.80 (+3.5%) · stop $129.10 (-1.6%) · reward/risk 2.2
+   Expected hold: about 2 hours · time stop Mon 13:40 New York
+   Confidence 62%
+   Why: ...
+   Wrong if: ...
+   Placing at 11:10 New York unless you send /skip NVDA
+   ```
+
+5. In **live** mode the order goes in after 5 minutes unless you send `/skip NVDA`, and
+   the trade is closed when its expected time has clearly passed (a time stop). In
+   **shadow** mode the message says "SHADOW (no order) · WOULD BUY", nothing is placed,
+   and after the close the plan is scored on the full market's minute-by-minute prices,
+   costs included, as if it had been placed.
+
+**Limits.** At most 30 Claude calls, 8 decisions and 3 trades a day, $10 a month of
+B's $30, and all of B's normal risk limits (positions, sectors, pause, kill switch). It
+also respects the US day-trading rule: an account under $25,000 may make only 3 day
+trades in 5 days, so the scanner stops placing when that limit is used. (Your real
+$1,000 account would be under this rule too.)
+
+**It starts in shadow mode.** After about two weeks, look at its record:
+
+```bash
+docker compose exec app-b papertrader scanner
+```
+
+It is judged on its own profit after costs. My rule: switch it to live only if the
+shadow plans made money after costs, over at least 15 plans that would have filled;
+otherwise leave it in shadow or turn it off. To switch: `mode: live` under
+`decision: intraday:` in `config/b.yaml`, then `docker compose restart app-b`.
+
+**IEX or the $99 SIP feed?** The free live prices (IEX) come from one exchange. The
+scanner compares every price it used with the full market's price at the same minute
+(available free 15 minutes later) and reports the typical gap. Stay on IEX unless that
+gap is above 5 basis points (0.05%) or many plans fail to fill; only then is the $99 a
+month SIP feed worth considering. Don't subscribe now.
+
+Honest expectation: short-term set-ups like these are hard to profit from after costs,
+and most of what the rules find will be passed on. That is why it starts in shadow mode
+and has its own scorecard.
 
 ## Plan for system C (phase X4)
 
@@ -231,6 +294,7 @@ every 10 minutes).
 
 * Every Telegram message starts with `[A]`, `[B]` or `[C]`.
 * Commands take a system: `/pnl B`, `/positions A`, `/pause B earnings week`, `/resume B`.
+  `/skip NVDA` cancels B's planned intraday trade in NVDA before it is placed.
   Without one, `/status`, `/positions`, `/pnl` and `/brief` answer for every system.
   `/pause` and `/resume` always need the system.
 * Logs: `docker compose logs -f app` (A), `docker compose logs -f app-b` (B),
@@ -251,6 +315,7 @@ every 10 minutes).
 | 08:25 | B copies A's agent reports, runs its own judge on them, then its switches |
 | 08:45 | Morning briefs, tagged [A] and [B] |
 | 09:35 | Orders (each system on its own account) |
+| 09:45-15:30 | B's intraday scanner, every 5 minutes (shadow mode at first) |
 | 10:30 | B's Fable test, if switched on (never traded) |
 | every 10 min | Each system watches its own positions |
 | 16:15 | End-of-day reconcile |
@@ -280,6 +345,7 @@ So the comparison stays fair, A must not change during the experiment:
 |---|---|---|
 | 2026-11-20 | A frozen at commit `e54f521` | A |
 | 2026-11-20 | B's decision layer (phase X2) | B only |
+| 2026-11-20 | B's intraday scanner, in shadow mode (phase X2b) | B only |
 
 ## How the data is kept apart (for the curious)
 

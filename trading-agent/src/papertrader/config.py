@@ -477,6 +477,46 @@ class FableShadow(_Strict):
         return value
 
 
+class IntradaySwitch(_Strict):
+    """X2b. The intraday scanner: checks the market every few minutes for set-ups, and
+    announces each planned trade on Telegram before placing it (send /skip to cancel)."""
+
+    enabled: bool = False
+    mode: Literal["shadow", "live"] = (
+        "shadow"  # shadow: everything but the order, scored afterwards
+    )
+    interval_minutes: int = Field(default=5, ge=1, le=30)
+    start: time = time(9, 45)
+    end: time = time(15, 30)
+    candidates_per_scan: int = Field(default=6, ge=1, le=20)
+    max_calls_per_day: int = Field(default=30, ge=0, le=200)  # Claude calls, screening and deciding
+    max_decisions_per_day: int = Field(default=8, ge=0, le=50)  # the more expensive model's calls
+    max_trades_per_day: int = Field(default=3, ge=0, le=20)
+    monthly_usd: float = Field(default=10.0, gt=0)  # the scanner's share of B's Claude budget
+    skip_window_minutes: int = Field(default=5, ge=1, le=60)
+    screen_model: str = "claude-haiku-5-5"
+    decide_model: str = "claude-sonnet-5-5"
+    decide_effort: Effort = "medium"
+    min_confidence: Fraction = 0.6
+    min_reward_risk: float = Field(default=1.5, ge=1.0)
+    max_hold_days: int = Field(default=3, ge=1, le=10)
+    min_price: float = Field(default=5.0, ge=0)
+    min_relative_volume: float = Field(default=1.5, ge=0)
+    big_move_atr: float = Field(default=1.0, gt=0)  # a day's move this many average daily ranges
+    cooldown_minutes: int = Field(
+        default=60, ge=0
+    )  # do not look at the same stock again before this
+    cost_bps: float = Field(default=10.0, ge=0)  # round trip, taken off every shadow result
+
+    @model_validator(mode="after")
+    def _window(self) -> Self:
+        if not time(9, 35) <= self.start < self.end <= time(15, 50):
+            raise ValueError(
+                "decision.intraday: start/end must lie between 09:35 and 15:50, start first"
+            )
+        return self
+
+
 class DecisionConfig(_Strict):
     """System B's decision layer. Everything off is exactly system A's behaviour."""
 
@@ -491,6 +531,7 @@ class DecisionConfig(_Strict):
     analysts: AnalystSwitch = AnalystSwitch()
     meta_label: MetaLabelSwitch = MetaLabelSwitch()
     fable_shadow: FableShadow = FableShadow()
+    intraday: IntradaySwitch = IntradaySwitch()
 
     @property
     def active(self) -> bool:
@@ -534,6 +575,8 @@ class AppConfig(_Strict):
             models.add(self.decision.veto.model)
         if self.decision.fable_shadow.enabled:
             models.add(self.decision.fable_shadow.model)
+        if self.decision.intraday.enabled:
+            models |= {self.decision.intraday.screen_model, self.decision.intraday.decide_model}
         for name in KNOWN_AGENTS:
             settings = self.agents.for_agent(name)
             if settings.enabled:

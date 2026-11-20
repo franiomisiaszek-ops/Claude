@@ -57,8 +57,11 @@ class JobFailed(RuntimeError):
 class JobSpec:
     name: str
     title: str
-    at: Callable[[AppConfig], time] | None  # None: the monitor, which repeats
+    at: Callable[[AppConfig], time] | None  # None: repeats during market hours
     weekly: bool = False
+    every: Callable[[AppConfig], int] | None = (
+        None  # minutes between repeats (default: the monitor's)
+    )
 
 
 SPECS: tuple[JobSpec, ...] = (
@@ -69,6 +72,8 @@ SPECS: tuple[JobSpec, ...] = (
     JobSpec("morning_brief", "Telegram morning brief", lambda c: c.schedule.morning_brief),
     JobSpec("place_orders", "sell what the judge dropped, then place today's orders", lambda c: c.schedule.place_orders),
     JobSpec("monitor", "fills, time stops, kill switch, bad news on held stocks", None),
+    JobSpec("intraday", "system B's intraday scanner: plans, orders after the /skip window, time stops", None,
+            every=lambda c: c.decision.intraday.interval_minutes),
     JobSpec("fable_shadow", "system B's Fable test: some agents again on Claude Fable, never traded", lambda c: c.schedule.b_fable),
     JobSpec("reconcile_eod", "cancel unfilled orders, end-of-day summary", lambda c: c.schedule.reconcile_eod),
     JobSpec("resolve_outcomes", "score agent calls whose horizon has ended", lambda c: c.schedule.resolve_outcomes),
@@ -77,7 +82,7 @@ SPECS: tuple[JobSpec, ...] = (
 BY_NAME = {spec.name: spec for spec in SPECS}
 
 # B reuses A's research and does not load market data; C gets its own jobs in Phase X4.
-B_ONLY = ("b_signals", "fable_shadow")
+B_ONLY = ("b_signals", "intraday", "fable_shadow")
 SYSTEM_JOBS: dict[str, tuple[str, ...]] = {
     "A": tuple(spec.name for spec in SPECS if spec.name not in B_ONLY),
     "B": (
@@ -86,6 +91,7 @@ SYSTEM_JOBS: dict[str, tuple[str, ...]] = {
         "morning_brief",
         "place_orders",
         "monitor",
+        "intraday",
         "fable_shadow",
         "reconcile_eod",
         "resolve_outcomes",
@@ -99,6 +105,8 @@ def specs_for(system: str, config: AppConfig | None = None) -> tuple[JobSpec, ..
     names = set(SYSTEM_JOBS[system])
     if config is not None and not config.decision.fable_shadow.enabled:
         names.discard("fable_shadow")  # only scheduled while the test is switched on
+    if config is not None and not config.decision.intraday.enabled:
+        names.discard("intraday")
     return tuple(spec for spec in SPECS if spec.name in names)
 
 
@@ -117,6 +125,7 @@ class Jobs:
         *,
         broker: Callable[[], Broker | None] | None = None,
         anthropic: Callable[[], AsyncAnthropic | None] | None = None,
+        live: Callable[[], Any] | None = None,
         now: Callable[[], datetime] = utcnow,
         sleep: Callable[[float], None] = time_module.sleep,
     ) -> None:
@@ -129,6 +138,8 @@ class Jobs:
             runtime.settings, runtime.config, runtime.system
         )
         self._anthropic = anthropic or self._default_anthropic
+        self._live = live or self._default_live
+        self._scanner: Any = None
         self.now = now
         self.sleep = sleep
         self.trading_lock = threading.Lock()  # orders, monitor and reconcile never overlap
@@ -140,6 +151,17 @@ class Jobs:
         self.writes_market_data = runtime.system == "A"
 
     # ------------------------------------------------------------------ resources
+
+    def _default_live(self) -> Any:
+        """Live prices and news for the intraday scanner (this system's paper keys)."""
+        key, secret = self.runtime.settings.alpaca_keys(self.system)
+        if not (key and secret):
+            return None
+        from papertrader.b.live import AlpacaLive
+
+        return AlpacaLive(
+            key.get_secret_value(), secret.get_secret_value(), feed=self.config.trading.live_feed
+        )
 
     def _default_anthropic(self) -> AsyncAnthropic | None:
         key = self.runtime.settings.anthropic_api_key
@@ -237,7 +259,7 @@ class Jobs:
         day = new_york_date(now)
         spec = BY_NAME[name]
         trading = self.trading_day(day)
-        if not manual and name == "monitor" and not self._monitor_due(now, trading):
+        if not manual and spec.at is None and not self._monitor_due(now, trading):
             return RunOutcome(name, "not_due", "outside market hours", {})
         scheduled_for = now.replace(microsecond=0) if manual else self.slot(name, now)
 
@@ -496,7 +518,17 @@ class Jobs:
         with self.trading_lock:
             summary = self._engine().end_of_day()
         expired = list(summary.get("expired", []))
-        return {"expired": expired, "summary": f"{len(expired)} unfilled order(s) cancelled"}
+        details: dict[str, Any] = {
+            "expired": expired,
+            "summary": f"{len(expired)} unfilled order(s) cancelled",
+        }
+        if self.system == "B" and self.config.decision.intraday.enabled:
+            from papertrader.b.scanner import manage_open
+
+            if self.config.decision.intraday.mode == "live":
+                details["intraday_managed"] = manage_open(self.sessions, self._engine(), self.now())
+            details["intraday_scored"] = self._score_intraday()
+        return details
 
     def _resolve(self, *, refresh_prices: bool) -> dict[str, Any]:
         from papertrader.learning.outcomes import resolve_outcomes
@@ -531,7 +563,38 @@ class Jobs:
             with self.sessions() as session:
                 details["fable_scored"] = score_shadow(session, self.config, now)
                 session.commit()
+            details["intraday_scored"] = self._score_intraday()
         return details
+
+    def job_intraday(self) -> dict[str, Any]:
+        from papertrader.b import scanner as sc
+
+        live = self._live()
+        if live is None:
+            raise JobFailed("this system's Alpaca paper keys are not set in .env")
+        now = self.now()
+        details: dict[str, Any] = {}
+        engine = self._engine()
+        if self.config.decision.intraday.mode == "live":
+            with self.trading_lock:
+                details["placed"] = sc.place_due(self.sessions, self.config, engine, now)
+                details["managed"] = sc.manage_open(self.sessions, engine, now)
+        if self._scanner is None:
+            self._scanner = sc.Scanner(self.config, self.sessions, live, self._need_claude,
+                                       equity=lambda: engine.broker.account().equity)  # fmt: skip
+        report = asyncio.run(self._scanner.scan(now))
+        details |= report.details()
+        details["summary"] = (report.note or f"{report.candidates} candidates, {report.decided} decided, "
+                              f"planned: {', '.join(report.planned) or 'none'}")  # fmt: skip
+        return details
+
+    def _score_intraday(self) -> int | None:
+        if not (self.system == "B" and self.config.decision.intraday.enabled):
+            return None
+        from papertrader.b.scanner import score_plans
+
+        live = self._live()
+        return None if live is None else score_plans(self.sessions, self.config, live, self.now())
 
     def job_b_signals(self) -> dict[str, Any]:
         from papertrader.b.daily import run_signals
