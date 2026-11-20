@@ -62,6 +62,36 @@ one's effect on its own, and only those that help on the unseen years are switch
 5. Fractional shares, needed for a real $1,000 account; whole shares for any ETF that
    cannot be bought in fractions.
 
+**Copying C on Avanza.** EU rules stop private investors from buying US-listed ETFs, so
+every C message also lists the matching European (UCITS) product for each ETF, e.g.
+SPY -> iShares Core S&P 500 UCITS (CSPX), GLD -> a physical gold ETC, SGOV -> iShares
+$ Treasury Bond 0-1yr UCITS (IB01) or a SEK money-market fund. Amounts are shown scaled
+to your own capital (a setting), rounded to whole shares, with what is left over. The
+list lives in `config/c.yaml` and is checked against what Avanza sells when X4 is built.
+Results will differ a little (currency moves, Avanza's ~0.25% currency fee).
+
+**C's daily chart trades (a separate part of C, with its own switch):**
+
+* Short-term trades on the same ETFs, from chart rules (for example: a break above the
+  recent high while the trend is up, or a dip inside an uptrend), at most 20% of C's money.
+* Backtested on the same 20 years first, with costs, and only switched on if it adds
+  profit after costs on the years it never saw. Then 2-4 weeks in shadow mode (messages
+  only, no orders).
+* Judged on its own profit after costs, apart from C's weekly portfolio, and switched off
+  if it does not add any. The same risk limits apply (daily kill switch, the drawdown
+  rules).
+* Honest expectation: short-term chart trading has much weaker evidence than weekly
+  trend following, and copying daily trades by hand on Avanza is hard and costly, so
+  these messages are marked "not for copying" unless you change that.
+
+**Telegram heads-up for C:**
+
+* Weekly portfolio: the plan for Monday is sent on Friday after the close (what to buy
+  and sell, why, the Avanza products and amounts), so there is time to copy it.
+* Daily trades: a PLANNED BUY or PLANNED SELL a few minutes before the order (default 3,
+  phase X6), with the price, stop, target, expected holding time, and which chart rule
+  fired, in plain words. A warning when a position gets close to its stop or target.
+
 **For B (phase X2):** insider cluster buying and analyst revisions are backtested on
 history before they are switched on (SEC Form 4 back to 2003, free; FMP's estimate
 history with the paid plan). The Claude agents cannot be backtested honestly, because
