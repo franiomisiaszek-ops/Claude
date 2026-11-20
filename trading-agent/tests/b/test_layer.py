@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import numpy as np
 import pytest
@@ -226,10 +226,13 @@ def snapshot(prices: list[float]) -> Snapshot:
 
 
 def trade(**changes: object) -> RankedTrade:
-    base = dict(rank=1, ticker="AAPL", action="buy", judge_confidence=0.8, model_probability=0.7,
-                agent_agreement=0.8, final_confidence=0.76, entry_low=99.5, entry_high=100.5,
-                target_price=106.0, stop_price=97.0, size_pct=0.08, horizon_days=5, rationale="r",
-                dissent="", supporting=[1], opposing=[], status="proposed")  # fmt: skip
+    base: dict[str, object] = {
+        "rank": 1, "ticker": "AAPL", "action": "buy", "judge_confidence": 0.8,
+        "model_probability": 0.7, "agent_agreement": 0.8, "final_confidence": 0.76,
+        "entry_low": 99.5, "entry_high": 100.5, "target_price": 106.0, "stop_price": 97.0,
+        "size_pct": 0.08, "horizon_days": 5, "rationale": "r", "dissent": "", "supporting": [1],
+        "opposing": [], "status": "proposed",
+    }  # fmt: skip
     return RankedTrade.model_validate(base | changes)
 
 

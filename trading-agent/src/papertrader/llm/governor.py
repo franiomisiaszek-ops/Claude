@@ -73,7 +73,13 @@ class CostGovernor:
         *,
         now: Callable[[], datetime] = utcnow,
         cycle_cap_usd: float | None = None,
+        only: tuple[str, ...] | None = None,
+        exclude: tuple[str, ...] = (),
     ) -> None:
+        """`only` / `exclude`: count just these purposes, or all but these, against the
+        budget (system B keeps its Fable test on a budget of its own)."""
+        self._only = only
+        self._exclude = exclude
         self._sessions = session_factory
         self._budget = budget
         self._now = now
@@ -86,9 +92,14 @@ class CostGovernor:
 
     def _spent_since(self, start: datetime) -> float:
         with self._sessions() as session:
-            total = session.scalar(
-                select(func.coalesce(func.sum(ApiUsage.cost_usd), 0.0)).where(ApiUsage.ts >= start)
+            query = select(func.coalesce(func.sum(ApiUsage.cost_usd), 0.0)).where(
+                ApiUsage.ts >= start
             )
+            if self._only is not None:
+                query = query.where(ApiUsage.purpose.in_(self._only))
+            if self._exclude:
+                query = query.where(ApiUsage.purpose.not_in(self._exclude))
+            total = session.scalar(query)
         return float(total or 0.0)
 
     def status(self) -> BudgetStatus:

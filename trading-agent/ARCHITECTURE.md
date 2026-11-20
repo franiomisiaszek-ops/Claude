@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phases 1-8, experiment X1)
+## What exists today (Phases 1-8, experiment X1-X2)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -594,6 +594,33 @@ The freeze: A runs the Docker image `papertrader:a-frozen`, built once from comm
 `e54f521`, with `config/a.yaml`. Everything new goes into B or C. A shared table cannot
 gain a column (A's frozen code would not know it), so B's and C's new data gets new
 tables in their own schemas.
+
+## System B's decision layer (X2)
+
+`b/layer.py` plugs into the judge stage through a small protocol (`JudgeLayer` in
+`research/cycle.py`): `prepare` before the judge, `apply` after it, `record` next to the
+stored decision. A's frozen code never sees it.
+
+```
+A's reports (copied) --prepare--> judge (Opus) --apply--> B's trade ideas --> orders
+      | 4 pruning                                 | 1 calibration + abstain
+      | 5 insiders, 6 sector, 8/9 paid signals    | 10 meta-label, 2 ATR/size/SPY filter
+      |   (extra context, facts only)             | 7 cost band, 3 review (remove/shrink only)
+                                                  +--> b_decision_log: A's answer vs B's, step by step
+```
+
+| Piece | File | What it does |
+|---|---|---|
+| Switches | `config.py` (`DecisionConfig`), `config/b.yaml` | Ten switches plus the Fable test; all off = A's behaviour |
+| B-only tables | `b/models.py` | Own `MetaData` (not the shared `Base`), provisioned into B's schema: decision log, signals, calibrations, Fable reports, backtests. The freeze tests are untouched |
+| Past ideas and their outcome | `b/outcomes.py` | Ideas from B's log and from A's stored decisions (read-only), scored like agent calls: open after the decision to the close `horizon` days later, against SPY or the sector fund |
+| Calibration, abstaining | `b/calibrate.py` | Isotonic regression on the older 70% of resolved ideas, split-conformal level on the newest 30%; inactive below `min_ideas` |
+| Pruning | `b/pruning.py` | Shrunk hit rate per agent from A's scored calls |
+| Review | `b/veto.py`, `b/prompts.py` | One structured call; verdicts for unknown tickers ignored; fails open. B's prompts live apart from `agents/prompts.py`, which is part of the reuse fingerprint |
+| Signals | `b/signals.py`, `b/paid.py`, `b/daily.py` | Insider clusters from Form 4 (point-in-time), MarketData.app and FMP adapters (key-gated, strict format checks), the 08:00 job |
+| Backtest | `b/backtest.py` | Replays the insider rule without look-ahead; month-block bootstrap; verdict rule fixed in advance |
+| Meta-labelling | `b/meta.py` | Regularised logistic regression; used only if it beats the blend and the base rate on the newest ideas |
+| The Fable test | `b/daily.py` (`run_fable`, `score_shadow`, `fable_comparison`) | Chosen agents re-run on Fable from B's copy of the day, never traded; own budget through `CostGovernor(only=...)`, excluded from B's main budget |
 
 ## Design rules
 

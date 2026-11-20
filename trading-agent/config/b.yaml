@@ -232,7 +232,6 @@ decision:
   analysts:                    # 9: needs FMP_API_KEY (Financial Modeling Prep, about $49/month)
     enabled: false
     max_tickers: 15
-    transcripts: false
   meta_label:                  # 10: a small model on past ideas; needs 150 resolved ideas
     enabled: false
     min_ideas: 150

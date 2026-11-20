@@ -30,6 +30,8 @@ telegram_app = typer.Typer(no_args_is_help=True, help="Telegram messages and the
 app.add_typer(telegram_app, name="telegram")
 jobs_app = typer.Typer(no_args_is_help=True, help="The daily schedule: see it, run a job by hand.")
 app.add_typer(jobs_app, name="jobs")
+backtest_app = typer.Typer(no_args_is_help=True, help="System B: historical tests of its rules.")
+app.add_typer(backtest_app, name="backtest")
 
 
 @app.callback()
@@ -1145,3 +1147,122 @@ def ingest_steps() -> None:
 
 if __name__ == "__main__":
     app()
+
+
+# --------------------------------------------------------------------------- system B
+
+
+def _system_b() -> Any:
+    from papertrader.runtime import bootstrap
+
+    try:
+        runtime = bootstrap(migrate=True, log_format="console", system="B")
+    except (ConfigError, LiveTradingForbiddenError) as exc:
+        raise _fail(str(exc)) from exc
+    return runtime
+
+
+@app.command()
+def switches() -> None:
+    """System B: which switches are on, and the state of calibration and pruning."""
+    from sqlalchemy import select
+
+    from papertrader.b.models import Calibration
+    from papertrader.b.pruning import records
+    from papertrader.db.types import utcnow
+
+    runtime = _system_b()
+    decision = runtime.config.decision
+    labels = {
+        "1_confidence": "1  confidence: no pattern model, calibration, abstain",
+        "2_risk": "2  risk: ATR stops/targets, risk sizing, SPY 200-day filter",
+        "3_veto": "3  review that may only remove or shrink trades",
+        "4_pruning": "4  leave out agents worse than a coin flip",
+        "5_insiders": "5  insider cluster buying",
+        "6_sector_relative": "6  against the sector fund",
+        "7_cost_band": "7  skip trades whose edge does not beat costs",
+        "8_options": "8  options data (MarketData.app, paid)",
+        "9_analysts": "9  analyst data (FMP, paid)",
+        "10_meta_label": "10 meta-labelling",
+    }
+    for key, on in decision.switches().items():
+        typer.echo(f"  {'ON ' if on else 'off'}  {labels[key]}")
+    typer.echo(
+        f"  {'ON ' if decision.fable_shadow.enabled else 'off'}  the Fable test (never trades)"
+    )
+    with runtime.session_factory() as session:
+        latest = session.scalars(
+            select(Calibration).order_by(Calibration.id.desc()).limit(1)
+        ).first()
+    typer.echo(
+        "Calibration      : "
+        + (latest.note if latest else "not fitted yet (it is fitted at the judge's run)")
+    )
+    if decision.pruning.enabled:
+        found = records(runtime.engine, decision.pruning, utcnow())
+        dropped = sorted(a for a, r in found.items() if not r.keep)
+        typer.echo("Left-out agents  : " + (", ".join(dropped) if dropped else "none"))
+
+
+@backtest_app.command("insiders")
+def backtest_insiders() -> None:
+    """Replay the insider cluster rule (switch 5) over the stored Form 4 filings."""
+    from papertrader.b.backtest import run
+    from papertrader.db.types import utcnow
+
+    runtime = _system_b()
+    with runtime.session_factory() as session:
+        row = run(session, runtime.config, utcnow())
+        session.commit()
+    result = row.result
+    typer.echo(
+        f"Clusters found: {result['events']}"
+        + (f" ({result['first']} to {result['last']})" if result.get("first") else "")
+    )
+    typer.echo("Average return against the sector fund (and SPY), with the share that beat it:")
+    for half in ("earlier", "later", "all"):
+        for horizon in (5, 20, 60):
+            sector = result.get(f"{half}_{horizon}d_sector", {})
+            spy = result.get(f"{half}_{horizon}d_spy", {})
+            if not sector.get("n"):
+                continue
+            ci = sector.get("ci90")
+            band = f", 90% interval {ci[0]:+.2%} to {ci[1]:+.2%}" if ci else ""
+            typer.echo(f"  {half:<8}{horizon:>3} days: {sector['mean_excess']:+.2%} vs sector{band}; "
+                       f"{spy.get('mean_excess', 0):+.2%} vs SPY; beat the sector {sector['hit_rate']:.0%} "
+                       f"(n={sector['n']})")  # fmt: skip
+    typer.secho("Verdict: " + row.verdict, bold=True)
+
+
+@app.command("paid-data-check")
+def paid_data_check(ticker: str = "AAPL") -> None:
+    """System B: one real call to each paid data service whose key is set, to verify it."""
+    import httpx
+
+    from papertrader.b import paid
+    from papertrader.db.types import utcnow
+    from papertrader.ingest.timeutil import new_york_date
+
+    runtime = _system_b()
+    settings = runtime.settings
+    if settings.marketdata_api_key is None and settings.fmp_api_key is None:
+        typer.echo(
+            "No MARKETDATA_API_KEY or FMP_API_KEY in .env: nothing to check (and nothing is paid for)."
+        )
+        return
+    with httpx.Client() as client:
+        if settings.marketdata_api_key is not None:
+            try:
+                view = paid.fetch_options(
+                    client, settings.marketdata_api_key.get_secret_value(), ticker
+                )
+                typer.secho(f"MarketData.app OK: {ticker}: {view.summary()}", fg=typer.colors.GREEN)
+            except paid.PaidDataError as exc:
+                typer.secho(f"MarketData.app problem: {exc}", fg=typer.colors.RED)
+        if settings.fmp_api_key is not None:
+            try:
+                grades = paid.fetch_analysts(client, settings.fmp_api_key.get_secret_value(), ticker,
+                                             new_york_date(utcnow()), price=None, month_ago_eps=None)  # fmt: skip
+                typer.secho(f"FMP OK: {ticker}: {grades.summary()}", fg=typer.colors.GREEN)
+            except paid.PaidDataError as exc:
+                typer.secho(f"FMP problem: {exc}", fg=typer.colors.RED)

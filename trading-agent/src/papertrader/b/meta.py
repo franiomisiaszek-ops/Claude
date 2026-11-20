@@ -7,8 +7,8 @@ features every past idea has (the judge's confidence, the agents' agreement, the
 the holding period, buy or short), so it cannot memorise much from little data.
 
 It stays off until `min_ideas` ideas have a known outcome, and is checked on the newest
-30% before it is used: if it does not beat simply using the blend on those ideas, it is
-not used.
+30% before it is used: if it does not beat both the blend and the plain hit rate on those
+ideas, it is not used.
 """
 
 from __future__ import annotations
@@ -63,11 +63,13 @@ def train(resolved: Sequence[Resolved], cfg: MetaLabelSwitch) -> MetaModel:
     model = LogisticRegression(C=0.5, max_iter=500).fit(x[:split], y[:split])
     held_y = y[split:]
     meta_p = model.predict_proba(x[split:])[:, 1]
-    base_p = [min(max(r.sample.raw, 0.01), 0.99) for r in ordered[split:]]
-    meta_loss, base_loss = _log_loss(list(meta_p), held_y), _log_loss(base_p, held_y)
+    blend_p = [min(max(r.sample.raw, 0.01), 0.99) for r in ordered[split:]]
+    rate = min(max(sum(y[:split]) / split, 0.01), 0.99)  # "every idea works this often"
+    meta_loss = _log_loss(list(meta_p), held_y)
+    base_loss = min(_log_loss(blend_p, held_y), _log_loss([rate] * len(held_y), held_y))
     if meta_loss >= base_loss:
-        return MetaModel(False, f"not used: no better than the blend on the newest ideas "
-                                f"(log loss {meta_loss:.3f} vs {base_loss:.3f})")  # fmt: skip
+        return MetaModel(False, f"not used: no better than the blend or the plain hit rate on the "
+                                f"newest ideas (log loss {meta_loss:.3f} vs {base_loss:.3f})")  # fmt: skip
     final = LogisticRegression(C=0.5, max_iter=500).fit(x, y)
     return MetaModel(True, f"trained on {len(ordered)} ideas; log loss {meta_loss:.3f} vs "
-                           f"{base_loss:.3f} for the blend on the newest", final)  # fmt: skip
+                           f"{base_loss:.3f} without it, on the newest", final)  # fmt: skip

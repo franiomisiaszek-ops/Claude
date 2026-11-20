@@ -19,8 +19,8 @@ points at the paper endpoint, and they refuse to start if two systems share a ke
 | Phase | What | Status |
 |---|---|---|
 | X0 | Claude Code helper pool (`.claude/` folder, used while building, never by the running program) | done |
-| X1 | Separate systems: own database sections, own paper accounts, own budgets; one Telegram hub | **done** |
-| X2 | B's better decision layer (switches) | not started |
+| X1 | Separate systems: own database sections, own paper accounts, own budgets; one Telegram hub | done |
+| X2 | B's better decision layer: ten switches, extra signals, the Fable test (see below) | **done** |
 | X2b | B's intraday scanner (shadow mode first) | not started |
 | X2c | B's post-mortems ("why did it move?") | not started |
 | X3 | Measurement: the pre-registered test and the comparison page | not started |
@@ -28,9 +28,75 @@ points at the paper endpoint, and they refuse to start if two systems share a ke
 | X5 | iPhone web app over Tailscale | not started |
 | X6 | Telegram upgrade (warnings before orders, Skip button, no length limit) | not started |
 
-Until X2 is built, B makes the same kind of decisions as A (its own judge on A's
-research). That is on purpose: it checks the plumbing before B gets its own ideas.
-The official start date, when all three accounts begin at $25,000, is set in X3.
+B judges the same research as A, then changes the decision with its switches (next
+section). The official start date, when all three accounts begin at $25,000, is set in X3.
+
+## System B's switches (phase X2)
+
+B's decision layer sits around its judge. Each switch is in `config/b.yaml` under
+`decision:` and can be turned off on its own; with all of them off B decides exactly like
+A. For every idea B records what A's rules would have done and what B did instead, step
+by step (the `b_decision_log` table), so each switch can later be measured against A on
+the same ideas (phase X3).
+
+| # | Switch | Default | What it does, simply |
+|---|---|---|---|
+| 1 | Honest confidence | ON | Leaves the pattern model out; turns the judge's confidence into "how often did ideas scored like this actually beat the market" (calibration), and skips trades the past data cannot vouch for (abstaining) |
+| 2 | Risk sizing | ON | Stop 2 and target 3 "average daily ranges" away, instead of the judge's guesses; size so a stop-out loses at most 1% of the account; half size for new buys while SPY is below its 200-day average |
+| 3 | Second look | ON | A cheaper model (Sonnet) reads each trade and may only keep it, shrink it or remove it, with a concrete reason. It can never add a trade or raise a size. If it fails, the trade stays as it was |
+| 4 | Agent pruning | ON | Stops listening to agents whose record, after allowing for luck, is worse than a coin flip. They keep running in A; B starts listening again if they recover |
+| 5 | Insider cluster buying | off | Shows the judge when 3+ insiders bought their own shares on the open market within 30 days. **Off until the backtest below says yes** |
+| 6 | Against the sector | ON | Shows and measures each stock against its sector fund, not only against SPY |
+| 7 | Cost band | off | Skips trades whose expected gain does not clearly beat trading costs |
+| 8 | Options data | off | Implied volatility, call-put spread and skew (MarketData.app, paid, about $12/month) |
+| 9 | Analyst data | off | Upgrades and downgrades, price targets, estimate revisions (FMP, paid, about $49/month) |
+| 10 | Meta-labelling | off | A small model trained on past ideas that picks which ones to take; only used once it beats the simpler rules on recent ideas |
+
+Honest notes:
+
+* **Switch 1 waits for data.** Calibration needs 60 ideas whose outcome is known (each
+  needs its holding period to pass), so for the first few weeks B uses the raw
+  confidence and A's bar, and its log says "waiting". That is expected.
+* **Switch 5 needs its backtest first.** It replays the rule over the insider filings
+  already in the database, with no look-ahead, and gives a verdict by a rule fixed in
+  advance (see `src/papertrader/b/backtest.py`). Run it, send me the output:
+
+  ```bash
+  docker compose exec app-b papertrader backtest insiders
+  ```
+
+* **Switches 8 and 9 cost money: don't subscribe yet.** Their code is ready and does
+  nothing without a key. The docs sites of both services were blocked from where this was
+  built, so the reply formats are checked carefully on arrival; after subscribing, one
+  command verifies them:
+
+  ```bash
+  docker compose exec app-b papertrader paid-data-check
+  ```
+
+  My recommendation: decide after the first month of the X3 pilot, and only if B's core
+  shows some signal. Adding data to a system that has none rarely creates it.
+* **Not built:** the optional sector hedge of switch 6 (shorting the sector fund against
+  each position), earnings-call transcripts, and short interest / borrow cost. The free
+  sources for the last two could not be checked from here; they can be added once the
+  paid services are in use and their formats can be verified.
+* Every 08:00 B also records the insider clusters the rule would have used, even with
+  switch 5 off, so the rule can be judged going forward too.
+
+To see what is on, and the state of calibration and pruning:
+
+```bash
+docker compose exec app-b papertrader switches
+```
+
+### The Fable test (optional, off)
+
+Two agents (news and earnings) also run on Claude Fable 5.2, on the same data as A's real
+(Sonnet) run (the same moment, rebuilt from the same database), every trading day at 10:30. The Fable reports are never traded;
+they are scored the same way as the real ones, so after a few months we can see whether
+the stronger model's calls are more often right. It has its own budget of $10 a month,
+separate from B's $30. To switch it on, set `decision: fable_shadow: enabled: true` in
+`config/b.yaml`, then `docker compose restart app-b`.
 
 ## Plan for system C (phase X4)
 
@@ -180,10 +246,12 @@ every 10 minutes).
 |---|---|
 | 06:30 | A loads the shared market data (news, filings, prices) for everyone |
 | 07:30 | A's research agents |
+| 08:00 | B's extra signals (insider clusters; options and analyst data if switched on) |
 | 08:20 | A's pattern model and judge |
-| 08:25 | B copies A's agent reports and runs its own judge on them |
+| 08:25 | B copies A's agent reports, runs its own judge on them, then its switches |
 | 08:45 | Morning briefs, tagged [A] and [B] |
 | 09:35 | Orders (each system on its own account) |
+| 10:30 | B's Fable test, if switched on (never traded) |
 | every 10 min | Each system watches its own positions |
 | 16:15 | End-of-day reconcile |
 | 17:00 / 17:10 | A, then B, score their past calls |
@@ -211,6 +279,7 @@ So the comparison stays fair, A must not change during the experiment:
 | Date | Change | Applied to |
 |---|---|---|
 | 2026-11-20 | A frozen at commit `e54f521` | A |
+| 2026-11-20 | B's decision layer (phase X2) | B only |
 
 ## How the data is kept apart (for the curious)
 

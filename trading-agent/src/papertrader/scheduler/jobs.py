@@ -38,6 +38,7 @@ from papertrader.trading.broker import Broker, TradingDay
 log = logging.getLogger(__name__)
 
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+FABLE_PURPOSE = "fable_shadow"  # system B's Fable test: its own budget, never traded
 
 
 class JobSkipped(Exception):
@@ -63,10 +64,12 @@ class JobSpec:
 SPECS: tuple[JobSpec, ...] = (
     JobSpec("ingest", "load overnight news, filings, prices and macro data", lambda c: c.schedule.ingest),
     JobSpec("research_agents", "the research agents write their reports", lambda c: c.schedule.research_agents),
+    JobSpec("b_signals", "system B's extra signals: insider clusters, options, analysts", lambda c: c.schedule.b_signals),
     JobSpec("judge", "pattern-model scores and the judge's decision", lambda c: c.schedule.score_and_judge),
     JobSpec("morning_brief", "Telegram morning brief", lambda c: c.schedule.morning_brief),
     JobSpec("place_orders", "sell what the judge dropped, then place today's orders", lambda c: c.schedule.place_orders),
     JobSpec("monitor", "fills, time stops, kill switch, bad news on held stocks", None),
+    JobSpec("fable_shadow", "system B's Fable test: some agents again on Claude Fable, never traded", lambda c: c.schedule.b_fable),
     JobSpec("reconcile_eod", "cancel unfilled orders, end-of-day summary", lambda c: c.schedule.reconcile_eod),
     JobSpec("resolve_outcomes", "score agent calls whose horizon has ended", lambda c: c.schedule.resolve_outcomes),
     JobSpec("weekly", "agent weights, retrain the model, lessons, weekly summary", lambda c: c.schedule.weekly_time, weekly=True),
@@ -74,13 +77,16 @@ SPECS: tuple[JobSpec, ...] = (
 BY_NAME = {spec.name: spec for spec in SPECS}
 
 # B reuses A's research and does not load market data; C gets its own jobs in Phase X4.
+B_ONLY = ("b_signals", "fable_shadow")
 SYSTEM_JOBS: dict[str, tuple[str, ...]] = {
-    "A": tuple(spec.name for spec in SPECS),
+    "A": tuple(spec.name for spec in SPECS if spec.name not in B_ONLY),
     "B": (
+        "b_signals",
         "judge",
         "morning_brief",
         "place_orders",
         "monitor",
+        "fable_shadow",
         "reconcile_eod",
         "resolve_outcomes",
         "weekly",
@@ -89,8 +95,10 @@ SYSTEM_JOBS: dict[str, tuple[str, ...]] = {
 }
 
 
-def specs_for(system: str) -> tuple[JobSpec, ...]:
-    names = SYSTEM_JOBS[system]
+def specs_for(system: str, config: AppConfig | None = None) -> tuple[JobSpec, ...]:
+    names = set(SYSTEM_JOBS[system])
+    if config is not None and not config.decision.fable_shadow.enabled:
+        names.discard("fable_shadow")  # only scheduled while the test is switched on
     return tuple(spec for spec in SPECS if spec.name in names)
 
 
@@ -127,7 +135,7 @@ class Jobs:
         self._days: dict[date, TradingDay | None] = {}
         self._clock_checked: datetime | None = None
         self.system = runtime.system
-        self.specs = specs_for(runtime.system)
+        self.specs = specs_for(runtime.system, runtime.config)
         # Only A loads market data; B and C read it and never write to it.
         self.writes_market_data = runtime.system == "A"
 
@@ -150,8 +158,18 @@ class Jobs:
         api = self._anthropic()
         if api is None:
             return None
-        governor = CostGovernor(self.sessions, self.config.budget)
+        governor = CostGovernor(self.sessions, self.config.budget, exclude=(FABLE_PURPOSE,))
         return ClaudeClient(api, self.sessions, self.config.budget, governor)
+
+    def fable_claude(self) -> ClaudeClient:
+        """System B's Fable test, on its own small budget (decision.fable_shadow.monthly_usd)."""
+        api = self._anthropic()
+        if api is None:
+            raise JobFailed("ANTHROPIC_API_KEY is not set in .env")
+        fable = self.config.decision.fable_shadow
+        budget = self.config.budget.model_copy(update={"monthly_usd": fable.monthly_usd})
+        governor = CostGovernor(self.sessions, budget, only=(FABLE_PURPOSE,))
+        return ClaudeClient(api, self.sessions, budget, governor)
 
     def _need_claude(self) -> ClaudeClient:
         client = self.claude()
@@ -507,6 +525,36 @@ class Jobs:
         details |= {"resolved": report.resolved, "waiting": report.waiting, "no_prices": report.no_prices,
                     "replays_ignored": report.replays, "stat_rows": rows}  # fmt: skip
         details["summary"] = f"{report.resolved} calls scored, {report.waiting} still running"
+        if self.system == "B":
+            from papertrader.b.daily import score_shadow
+
+            with self.sessions() as session:
+                details["fable_scored"] = score_shadow(session, self.config, now)
+                session.commit()
+        return details
+
+    def job_b_signals(self) -> dict[str, Any]:
+        from papertrader.b.daily import run_signals
+
+        details = run_signals(self.runtime.engine, self.sessions, self.config, self.runtime.settings,
+                              self.now())  # fmt: skip
+        details["summary"] = (f"{details['insider_clusters']} insider clusters, {details['options']} options, "
+                              f"{details['analysts']} analyst signals")  # fmt: skip
+        if details["problems"]:
+            details["summary"] += "; problems: " + "; ".join(details["problems"])
+        return details
+
+    def job_fable_shadow(self) -> dict[str, Any]:
+        from papertrader.b.daily import run_fable
+
+        details = asyncio.run(
+            run_fable(self.sessions, self.config, self.fable_claude(), self.now())
+        )
+        if "skipped" in details:
+            raise JobSkipped(details["skipped"])
+        details["summary"] = (
+            ", ".join(f"{a}: {v}" for a, v in details["agents"].items()) or "no agents ran"
+        )
         return details
 
     def job_resolve_outcomes(self) -> dict[str, Any]:

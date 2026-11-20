@@ -81,6 +81,7 @@ class ScheduleConfig(_Strict):
     research_agents: time = time(7, 30)
     score_and_judge: time = time(8, 20)
     b_signals: time = time(8, 0)  # system B's extra signals, before its judge
+    b_fable: time = time(10, 30)  # system B's Fable test (never trades, so any time works)
     morning_brief: time = time(8, 45)
     place_orders: time = time(9, 35)
     monitor_interval_minutes: int = Field(default=10, ge=1, le=60)
@@ -442,11 +443,10 @@ class OptionsSwitch(_Strict):
 
 
 class AnalystSwitch(_Strict):
-    """9. Analyst revisions and earnings-call transcripts (FMP, paid)."""
+    """9. Analyst grades, price targets and estimate revisions (FMP, paid)."""
 
     enabled: bool = False
     max_tickers: int = Field(default=15, ge=1, le=100)
-    transcripts: bool = False
 
 
 class MetaLabelSwitch(_Strict):
@@ -573,6 +573,8 @@ class Settings(BaseSettings):
     telegram_chat_id: str | None = None
     finnhub_api_key: SecretStr | None = None
     fred_api_key: SecretStr | None = None
+    marketdata_api_key: SecretStr | None = None  # system B, switch 8 (paid)
+    fmp_api_key: SecretStr | None = None  # system B, switch 9 (paid)
     sec_user_agent: str | None = None
     wikipedia_contact: str | None = None
 
@@ -615,6 +617,8 @@ class Settings(BaseSettings):
             "telegram_chat_id",
             "finnhub_api_key",
             "fred_api_key",
+            "marketdata_api_key",
+            "fmp_api_key",
             "sec_user_agent",
         )
         return {name.upper(): getattr(self, name) is not None for name in names}

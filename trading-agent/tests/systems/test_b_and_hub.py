@@ -71,9 +71,14 @@ def b_jobs(b_engine: Engine, fake: FakeClaude, clock: list[Any], config: Any = C
 
 
 def test_each_system_runs_its_own_jobs() -> None:
-    assert [s.name for s in specs_for("B")] == ["judge", "morning_brief", "place_orders", "monitor",
-                                               "reconcile_eod", "resolve_outcomes", "weekly"]  # fmt: skip
-    assert "ingest" in [s.name for s in specs_for("A")] and specs_for("C") == ()
+    assert [s.name for s in specs_for("B", CFG)] == ["b_signals", "judge", "morning_brief", "place_orders",
+                                                    "monitor", "reconcile_eod", "resolve_outcomes", "weekly"]  # fmt: skip
+    fable_on = CFG.model_copy(update={"decision": CFG.decision.model_copy(update={
+        "fable_shadow": CFG.decision.fable_shadow.model_copy(update={"enabled": True})})})  # fmt: skip
+    assert "fable_shadow" in [s.name for s in specs_for("B", fable_on)]
+    a_jobs = [s.name for s in specs_for("A")]
+    assert "ingest" in a_jobs and not {"b_signals", "fable_shadow"} & set(a_jobs)
+    assert specs_for("C") == ()
 
 
 def test_the_agent_settings_still_match_the_frozen_a() -> None:
