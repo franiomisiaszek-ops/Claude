@@ -30,7 +30,7 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 | 7 | Learning loop + scheduler | **done** (runs by itself once the app is up, see below) |
 | 8 | Dashboard + deployment guide | **done** (see [docs/WINDOWS.md](docs/WINDOWS.md)) |
 | 9 | Run on paper for 4-8 weeks | replaced by the three-way experiment |
-| X0-X6 | **Three-way experiment**: A (this system, frozen) vs B (better decisions) vs C (ETF trend portfolio), each on its own paper account | X0-X2c **done**; see [docs/EXPERIMENT.md](docs/EXPERIMENT.md) |
+| X0-X6 | **Three-way experiment**: A (this system, frozen) vs B (better decisions) vs C (ETF trend portfolio), each on its own paper account | X0-X3 **done**; see [docs/EXPERIMENT.md](docs/EXPERIMENT.md) |
 
 Right now the program can load and refresh all its data, run the research agents and the
 judge, trade their decisions on the Alpaca paper account, send everything to you on
@@ -623,6 +623,7 @@ config/                each experiment system's own settings: a.yaml (frozen), b
 docker-compose.yml     db + app (A) + app-b + app-c + hub + dashboard + backup
 docs/WINDOWS.md        running it on your PC: power, backups, updates, troubleshooting
 docs/EXPERIMENT.md     the three-way experiment: set-up, commands, freeze rules
+docs/PREREGISTRATION.md how the systems are judged, written before the data
 scripts/               backup.sh and restore.sh (run inside the backup container)
 src/papertrader/
   ingest/              data loading: one file per source, plus pipeline.py
@@ -633,6 +634,7 @@ src/papertrader/
   systems.py           the experiment's systems A, B, C and where each keeps its data
   hub.py               one Telegram bot for all systems
   b/                   system B: decision layer, signals, backtest, Fable test, intraday scanner, post-mortems
+  experiment/          measuring A vs B vs C vs SPY (pre-registered)
   cli.py               the `papertrader` command
   db/                  tables, migrations, sessions
   scheduler/           the long-running service: the schedule, jobs, watchdog

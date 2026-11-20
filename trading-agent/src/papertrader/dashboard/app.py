@@ -6,6 +6,8 @@ cannot change anything even by accident. Pages are picked in the sidebar.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 import streamlit as st
 
@@ -17,8 +19,8 @@ from papertrader.safety import ALPACA_PAPER_BASE_URL
 
 st.set_page_config(page_title="papertrader", layout="wide")
 
-PAGES = ("Overview", "Equity vs SPY", "Trades", "Decisions and reports", "Agent leaderboard",
-         "Pattern model", "API spend", "Jobs and messages", "Settings")  # fmt: skip
+PAGES = ("Overview", "Experiment: A vs B vs C", "Equity vs SPY", "Trades", "Decisions and reports",
+         "Agent leaderboard", "Pattern model", "API spend", "Jobs and messages", "Settings")  # fmt: skip
 
 
 @st.cache_resource
@@ -293,6 +295,42 @@ def page_jobs(engine) -> None:  # type: ignore[no-untyped-def]
     _table(data.notifications(engine), "No messages yet.")
 
 
+def page_experiment(config: AppConfig) -> None:
+    from papertrader.db.types import utcnow
+    from papertrader.experiment.measure import as_rows, compare, get_start
+    from papertrader.hub import open_views
+
+    st.subheader("The three-way experiment")
+    st.caption("Measured as written in advance in docs/PREREGISTRATION.md. Paper money only.")
+    views = open_views(get_settings())
+    try:
+        engines: dict[str, Any] = {name: view.engine for name, view in views.items()}
+        comparison = compare(engines, config, get_start(engines["A"]), utcnow())
+    finally:
+        for view in views.values():
+            view.engine.dispose()
+    for line in comparison.verdict:
+        st.write(line)
+    if comparison.start is None:
+        return
+    curves = pd.DataFrame(comparison.curves())
+    if not curves.empty:
+        st.altair_chart(charts.experiment_chart(curves, _theme()), width="stretch")
+    table = pd.DataFrame(as_rows(comparison))
+    for column in ("Net return", "Gross return", "Hit rate (5 days)"):
+        table[column] = table[column].map(lambda v: _pct(v, 1))
+    _table(table, "No system has data yet.")
+    for test in comparison.tests:
+        if test.mean is not None:
+            band = (
+                f"95% interval {test.interval[0]:+.4f} to {test.interval[1]:+.4f}"
+                if test.interval
+                else "too few days for an interval"
+            )
+            st.write(f"**{test.name}** {test.question}: mean {test.mean:+.4f} over {test.days} days; {band}"
+                     + (f"; p {test.p_holm:.2f} after Holm" if test.p_holm is not None else ""))  # fmt: skip
+
+
 def page_settings(config: AppConfig, status: data.SystemStatus) -> None:
     st.table({
         "Setting": ["Universe", "Research agents", "Judge", "Trade threshold", "Max per position",
@@ -341,6 +379,8 @@ page = st.sidebar.radio("Page", PAGES)
 st.sidebar.caption("Read-only. Nothing on these pages can change the system.")
 if page == "Overview":
     page_overview(engine, config, status)
+elif page == "Experiment: A vs B vs C":
+    page_experiment(config)
 elif page == "Equity vs SPY":
     page_equity(engine)
 elif page == "Trades":

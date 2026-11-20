@@ -182,12 +182,30 @@ def run_hub(runtime: Runtime) -> None:
             views[name] = view
             log.info("hub now serves another system", extra={"system": name})
 
+    def comparison() -> None:
+        """The weekly A vs B vs C message (docs/PREREGISTRATION.md)."""
+        from papertrader.experiment.weekly import weekly_text
+
+        client = make_client(settings)
+        try:
+            text = weekly_text({n: v.engine for n, v in views.items()}, runtime.config, utcnow())
+            client.send(chat, text)
+        except Exception:  # a report must never take the hub down
+            log.exception("weekly comparison failed")
+        finally:
+            client.close()
+
     bot = HubBot(views, make_client(settings), chat, settings, telegram=telegram)
     scheduler = BlockingScheduler(timezone=ZoneInfo(runtime.config.schedule.timezone))
     scheduler.add_job(send, "interval", seconds=telegram.outbox_interval_seconds, id="telegram_outbox",
                       max_instances=1, coalesce=True)  # fmt: skip
     scheduler.add_job(refresh, "interval", minutes=HUB_REFRESH_MINUTES, id="refresh_systems",
                       max_instances=1, coalesce=True)  # fmt: skip
+    exp = runtime.config.experiment
+    scheduler.add_job(comparison, CronTrigger(day_of_week=exp.weekly_day, hour=exp.weekly_time.hour,
+                                              minute=exp.weekly_time.minute,
+                                              timezone=ZoneInfo(runtime.config.schedule.timezone)),
+                      id="weekly_comparison", max_instances=1, coalesce=True, misfire_grace_time=3600)  # fmt: skip
     thread = BotThread(bot)  # type: ignore[arg-type]
 
     def _stop(signum: int, _frame: FrameType | None) -> None:

@@ -32,6 +32,10 @@ jobs_app = typer.Typer(no_args_is_help=True, help="The daily schedule: see it, r
 app.add_typer(jobs_app, name="jobs")
 backtest_app = typer.Typer(no_args_is_help=True, help="System B: historical tests of its rules.")
 app.add_typer(backtest_app, name="backtest")
+experiment_app = typer.Typer(
+    no_args_is_help=True, help="The three-way experiment: start it, compare A, B and C."
+)
+app.add_typer(experiment_app, name="experiment")
 
 
 @app.callback()
@@ -1347,3 +1351,88 @@ def postmortems(days: int = 7) -> None:
         typer.echo(f"  {c.day:%d %b} {c.ticker:<6} {c.kind:<12} {c.move_pct:+.1%} · decision {c.decision_quality:<7} "
                    f"· {c.evidence:<9} · {top[:70]}")  # fmt: skip
     typer.echo("Lessons check: " + (check.verdict if check else "not run yet (monthly)"))
+
+
+# --------------------------------------------------------------------------- the experiment
+
+
+def _views() -> Any:
+    from papertrader.hub import open_views
+    from papertrader.runtime import bootstrap
+
+    try:
+        runtime = bootstrap(log_format="console", system="A")
+    except (ConfigError, LiveTradingForbiddenError) as exc:
+        raise _fail(str(exc)) from exc
+    return runtime, open_views(runtime.settings)
+
+
+@experiment_app.command("report")
+def experiment_report() -> None:
+    """A vs B vs C vs SPY since the start, as pre-registered (docs/PREREGISTRATION.md)."""
+    from papertrader.db.types import utcnow
+    from papertrader.experiment.measure import compare, get_start, report_text
+    from papertrader.experiment.switches import review, review_text
+
+    runtime, views = _views()
+    engines = {name: view.engine for name, view in views.items()}
+    start = get_start(engines["A"])
+    now = utcnow()
+    typer.echo(report_text(compare(engines, runtime.config, start, now), runtime.config))
+    if start is not None and "B" in engines:
+        typer.echo("")
+        typer.echo(review_text(review(engines["B"], runtime.config, start, now)))
+
+
+@experiment_app.command("start")
+def experiment_start(
+    day: Annotated[
+        str | None, typer.Option("--date", help="YYYY-MM-DD (default: today, New York)")
+    ] = None,
+    clear_old_equity: Annotated[
+        bool,
+        typer.Option(
+            "--clear-old-equity",
+            help="Delete each system's equity history from before the start, so its own "
+            "'since start' figures begin at the new $25,000 (after resetting the paper accounts).",
+        ),
+    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", help="Do not ask for confirmation.")] = False,
+) -> None:
+    """Record the experiment's official start date (the reports measure from it)."""
+    from datetime import date as date_type
+
+    from sqlalchemy import delete
+
+    from papertrader.db import models as m
+    from papertrader.db.types import utcnow
+    from papertrader.experiment.measure import get_start, set_start
+    from papertrader.ingest.timeutil import at_new_york, new_york_date
+
+    now = utcnow()
+    try:
+        start = date_type.fromisoformat(day) if day else new_york_date(now)
+    except ValueError as exc:
+        raise _fail(f"--date must look like 2026-12-07 ({exc})") from exc
+    _, views = _views()
+    previous = get_start(views["A"].engine)
+    what = f"Record {start:%a %d %b %Y} as the start of the experiment"
+    if previous is not None:
+        what += f" (replacing {previous:%d %b %Y})"
+    if clear_old_equity:
+        what += ", and delete every system's equity history from before that day"
+    if not yes and not typer.confirm(what + "?"):
+        raise typer.Exit(code=1)
+    set_start(views["A"].engine, start, now)
+    typer.echo(f"Experiment start recorded: {start:%a %d %b %Y}.")
+    if clear_old_equity:
+        from datetime import time as time_type
+
+        cutoff = at_new_york(start, time_type(0))
+        for name, view in views.items():
+            with view.sessions() as session:
+                gone = session.execute(
+                    delete(m.EquitySnapshot).where(m.EquitySnapshot.ts < cutoff)
+                ).rowcount
+                session.commit()
+            typer.echo(f"  {name}: {gone} older equity record(s) deleted")

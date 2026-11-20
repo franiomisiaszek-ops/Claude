@@ -21,6 +21,7 @@ AGENTS = ("macro", "earnings", "sec_filings", "sector_analyst", "news_event", "t
           "insider_institutional", "contrarian")  # fmt: skip
 SPEND_GROUPS = ("research agents", "judge", "thesis checks", "headline labels")
 SERIES = ("papertrader", "SPY")
+SYSTEMS = ("A", "B", "C", "SPY")
 
 Theme = Literal["light", "dark"]
 AnyChart = alt.Chart | alt.LayerChart
@@ -115,3 +116,15 @@ def weights_chart(history: pd.DataFrame, theme: Theme = "light") -> AnyChart:
         height=260
     )
     return cast(AnyChart, chart)
+
+
+def experiment_chart(rows: pd.DataFrame, theme: Theme = "light") -> AnyChart:
+    """A, B and C after costs, and SPY: % since the experiment's start."""
+    present = present_in_order(rows["series"], SYSTEMS)
+    base = alt.Chart(rows).encode(
+        x=alt.X("day:T", timeUnit="yearmonthdate", axis=_time_axis()),
+        y=alt.Y("return %:Q", axis=alt.Axis(title="% since the start, after costs", gridOpacity=0.4)),
+        color=alt.Color("series:N", scale=color_scale(present, SYSTEMS, theme), legend=_legend()),
+        tooltip=[alt.Tooltip("day:T", format="%a %d %b %Y"), "series:N", alt.Tooltip("return %:Q", format="+.2f")],
+    )  # fmt: skip
+    return cast(AnyChart, (base.mark_line(strokeWidth=2)).properties(height=320))

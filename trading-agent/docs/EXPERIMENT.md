@@ -22,8 +22,8 @@ points at the paper endpoint, and they refuse to start if two systems share a ke
 | X1 | Separate systems: own database sections, own paper accounts, own budgets; one Telegram hub | done |
 | X2 | B's better decision layer: ten switches, extra signals, the Fable test (see below) | done |
 | X2b | B's intraday scanner (see below; shadow mode first) | done |
-| X2c | B's post-mortems: "why did it move?" and careful lessons (see below) | **done** |
-| X3 | Measurement: the pre-registered test and the comparison page | not started |
+| X2c | B's post-mortems: "why did it move?" and careful lessons (see below) | done |
+| X3 | Measurement: the pre-registered test, the weekly comparison, the comparison page (see below) | **done** |
 | X4 | System C: 20-year backtest first, then the weekly ETF portfolio (plan below) | not started |
 | X5 | iPhone web app over Tailscale | not started |
 | X6 | Telegram upgrade (warnings before orders, Skip button, no length limit) | not started |
@@ -209,6 +209,59 @@ docker compose exec app-b papertrader postmortems
 Cost: a cheap model per case and one digest a day, capped at $5 a month of B's $30. The
 "Post-mortems" page comes with the iPhone web app (phase X5).
 
+## How the systems are compared (phase X3)
+
+The rules were written down **before** any experiment data existed, so they cannot be
+bent to fit the results: [PREREGISTRATION.md](PREREGISTRATION.md). In short:
+
+* **Early guide: signal quality.** Each day, did the ideas a system was most confident
+  about do best over the next 5 days against their sector fund? (The "rank IC": 0 means
+  no skill, above about 0.05 is useful.) Every idea counts, traded or not, scored at 1, 5
+  and 10 days.
+* **Final verdict: money.** After about 3 months (63 trading days): each system's profit
+  **after its Claude and data costs**, compared with simply holding SPY, day by day, with
+  statistics that do not let a lucky streak look like skill.
+* **At your size.** Every report also shows each system as if it had run on your real
+  $1,000: the trading gain, minus the same Claude and data costs. At $1,000, $25 a month
+  of costs is 2.5% a month to make up before any profit.
+* **The default answer is SPY.** If no system beats holding SPY after costs with real
+  confidence, the recommendation is to hold SPY: the cheapest option.
+* **C** is reported every month but judged only after two to three years.
+
+**Every Saturday** (10:30 New York time, 16:30 in Poland) the hub sends a comparison
+on Telegram: each system and SPY since the start, after costs, at your $1,000, the
+signal quality and a plain-language verdict. In the first week of each month it adds
+**B's switch review**: which of B's switches removed trades that would have made money
+(or added trades that lost), with a recommendation to switch those off.
+
+Any time:
+
+```bash
+docker compose exec hub papertrader experiment report
+```
+
+The dashboard has a page "Experiment: A vs B vs C" with the same numbers and a chart.
+
+### The official start (not yet)
+
+The test starts on one day for everyone, with $25,000 in each account. I will tell you
+when; probably the Monday after system C (phase X4) is running, so all three start
+together. That day's steps will be:
+
+1. On the Friday before, after the close: pause the systems on Telegram (`/pause A start`,
+   `/pause B start`) and close any open positions (`docker compose exec app papertrader
+   trade close TICKER`, and the same with `app-b`).
+2. Over the weekend, reset each Alpaca paper account to $25,000. If a reset gives an
+   account new keys, put them in `.env`.
+3. Record the start, and delete the equity history from before it so each system's own
+   "since start" figures begin at $25,000:
+
+   ```bash
+   docker compose exec hub papertrader experiment start --date 2026-12-07 --clear-old-equity
+   ```
+
+   (with the real date). Then `/resume A` and `/resume B` on Telegram.
+
 ## Plan for system C (phase X4)
 
 C's rules are set with a 20-year backtest **before** it trades, then frozen.
@@ -370,7 +423,7 @@ every 10 minutes).
 | every 10 min | Each system watches its own positions |
 | 16:15 | End-of-day reconcile |
 | 17:00 / 17:10 | A, then B, score their past calls |
-| Saturday | Weekly reports |
+| Saturday | Weekly reports; 10:30 the hub's A vs B vs C comparison |
 
 B only reuses A's reports while the agent settings and prompts are exactly the frozen
 ones (it checks a fingerprint every morning). If they ever differ, B refuses and alerts
@@ -397,6 +450,7 @@ So the comparison stays fair, A must not change during the experiment:
 | 2026-11-20 | B's decision layer (phase X2) | B only |
 | 2026-11-20 | B's intraday scanner, in shadow mode (phase X2b) | B only |
 | 2026-11-20 | B's post-mortems and capped lessons (phase X2c) | B only |
+| 2026-11-20 | The measurement rules pre-registered (docs/PREREGISTRATION.md, phase X3) | all |
 
 ## How the data is kept apart (for the curious)
 

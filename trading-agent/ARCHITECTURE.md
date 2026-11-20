@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phases 1-8, experiment X1-X2c)
+## What exists today (Phases 1-8, experiment X1-X3)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -667,6 +667,22 @@ judge time: similar() past cases + explicit differences --> one comparability ca
 | `similarity`, `similar`, `evidence` | Same ticker, kind of news, sector, market trend, volatility; differences listed in words; anecdote / emerging / supported from counts |
 | `DecisionLayer._lessons` | Only for trades B would place; the reviewer judges comparability; nudges recorded in `b_lesson_uses`; ranking ignores upward nudges |
 | `evaluate`, `prune` | Brier score with vs without on resolved ideas, losers vs winners stopped; the three-month rule; old and never-comparable cases retired |
+
+## Measurement (X3)
+
+`experiment/`, read-only over every system's own tables and the shared prices; the rules
+are pre-registered in [docs/PREREGISTRATION.md](docs/PREREGISTRATION.md).
+
+| Piece | File | What it does |
+|---|---|---|
+| Start date | `experiment/measure.py` (`get_start`, `set_start`) | Kept in A's `system_state` (`experiment.start`), like the hub's Telegram offset |
+| Loading | `measure.load` | End-of-day equity, Claude spend per day, and every judged idea (from the stored decisions; the scanner's own are left out) |
+| Shadow scoring | `measure.signal` | Ideas scored at 1/5/10 days against their sector fund with `b/outcomes.resolve`; daily rank IC, Brier, hit rate |
+| Money | `measure.net_returns`, `spy_returns` | Daily net return after Claude and data costs; SPY's daily total return |
+| Statistics | `experiment/stats.py` | Spearman, moving-block bootstrap (5-day blocks, fixed seed), Newey-West (5 lags), Holm |
+| Hypotheses and verdict | `measure.hypotheses`, `measure.verdict` | H1-H3 paired by date; the pre-registered decision rule; the $1,000 cost rule |
+| Switch review | `experiment/switches.py` | B's decision log: trades each switch removed or added, scored at 5 days |
+| Reports | `experiment/weekly.py`, the hub's `weekly_comparison` job, `papertrader experiment report`, the dashboard page | One text and one set of numbers everywhere |
 
 ## Design rules
 

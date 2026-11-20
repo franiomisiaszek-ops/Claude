@@ -577,6 +577,19 @@ class DecisionConfig(_Strict):
         }
 
 
+class ExperimentConfig(_Strict):
+    """X3. How the three-way experiment is measured (docs/PREREGISTRATION.md)."""
+
+    real_capital_usd: float = Field(default=1000.0, gt=0)  # results are also shown at this size
+    data_costs_usd: dict[str, float] = Field(
+        default_factory=dict
+    )  # monthly paid data per system, e.g. {"B": 12}
+    pilot_days: int = Field(default=21, ge=1)
+    test_days: int = Field(default=63, ge=21)
+    weekly_day: Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"] = "sat"
+    weekly_time: time = time(10, 30)
+
+
 class AppConfig(_Strict):
     universe: UniverseConfig = UniverseConfig()
     schedule: ScheduleConfig = ScheduleConfig()
@@ -591,6 +604,7 @@ class AppConfig(_Strict):
     telegram: TelegramConfig = TelegramConfig()
     learning: LearningConfig = LearningConfig()
     decision: DecisionConfig = DecisionConfig()  # system B only
+    experiment: ExperimentConfig = ExperimentConfig()  # the hub and the comparison
 
     def models_in_use(self) -> set[str]:
         models = {self.judge.model, self.pattern_model.text_model}

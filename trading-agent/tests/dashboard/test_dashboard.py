@@ -161,7 +161,7 @@ def test_every_page_renders(project: Path, filled: bool) -> None:
     page = AppTest.from_file(APP).run(timeout=30)
     assert not page.exception, page.exception
     pages = page.sidebar.radio[0].options
-    assert len(pages) == 9
+    assert len(pages) == 10
     for name in pages:
         page.sidebar.radio[0].set_value(name).run(timeout=30)
         assert not page.exception, (name, page.exception)
@@ -174,3 +174,5 @@ def test_every_page_renders(project: Path, filled: bool) -> None:
     else:
         page.sidebar.radio[0].set_value("Equity vs SPY").run(timeout=30)
         assert any("No equity snapshots yet" in i.value for i in page.info)
+    page.sidebar.radio[0].set_value("Experiment: A vs B vs C").run(timeout=30)
+    assert any("has not started yet" in str(md.value) for md in page.markdown)

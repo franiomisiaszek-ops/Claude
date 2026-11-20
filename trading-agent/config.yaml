@@ -178,3 +178,13 @@ ingest:
     - { cik: "1061165", name: Lone Pine Capital }
     - { cik: "1536411", name: Duquesne Family Office }
     - { cik: "1791786", name: Elliott Investment Management }
+
+# The three-way experiment: how A, B and C are compared (docs/PREREGISTRATION.md).
+# Used by the hub (the weekly comparison message) and the dashboard.
+experiment:
+  real_capital_usd: 1000    # results are also shown as if made on this much real money
+  data_costs_usd: {}        # monthly paid data per system once subscribed, e.g. { B: 12 }
+  pilot_days: 21
+  test_days: 63
+  weekly_day: sat           # the weekly comparison on Telegram
+  weekly_time: "10:30"
