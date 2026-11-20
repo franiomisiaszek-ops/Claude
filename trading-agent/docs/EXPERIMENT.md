@@ -24,13 +24,48 @@ points at the paper endpoint, and they refuse to start if two systems share a ke
 | X2b | B's intraday scanner (shadow mode first) | not started |
 | X2c | B's post-mortems ("why did it move?") | not started |
 | X3 | Measurement: the pre-registered test and the comparison page | not started |
-| X4 | System C | not started |
+| X4 | System C: 20-year backtest first, then the weekly ETF portfolio (plan below) | not started |
 | X5 | iPhone web app over Tailscale | not started |
 | X6 | Telegram upgrade (warnings before orders, Skip button, no length limit) | not started |
 
 Until X2 is built, B makes the same kind of decisions as A (its own judge on A's
 research). That is on purpose: it checks the plumbing before B gets its own ideas.
 The official start date, when all three accounts begin at $25,000, is set in X3.
+
+## Plan for system C (phase X4)
+
+C's rules are set with a 20-year backtest **before** it trades, then frozen.
+
+**The backtest**
+
+* Data: daily ETF prices with dividends included, from each ETF's launch (about 2004 on),
+  from Tiingo (free key; you will be asked when X4 starts), cross-checked with Stooq and
+  Alpaca. T-bill rates and gold from FRED. Covers 2008, 2020 and 2022.
+* Honest test: the few settings (look-back periods, volatility target, number of ETFs
+  held) are chosen on 2004-2015 only, then tested once on 2016-2026, which they never saw.
+  Few settings, so the rules cannot simply memorise the past.
+* Costs included (spreads, slippage). Compared with holding SPY and with a 60/40 portfolio:
+  return, Sharpe ratio, worst drawdown, worst year. If C does not beat SPY after risk
+  on the unseen years, the report says so.
+* ETFs younger than the test (SGOV, DBMF, KMLM, later crypto) use a stand-in where one
+  exists (BIL or the FRED T-bill rate for SGOV) or join from their launch date; the
+  report says which.
+
+**Upgrades on top of the original X4 rules**, each a switch. The backtest shows each
+one's effect on its own, and only those that help on the unseen years are switched on:
+
+1. Cash is held in a T-bill ETF (SGOV, BIL as backup) instead of earning nothing.
+2. Dual momentum: an ETF is only eligible if its 12-month return also beats T-bills.
+3. Weights account for correlation (risk parity), not only each ETF's own volatility.
+   Same caps as before.
+4. Managed-futures ETFs (DBMF, KMLM) in the universe, at most 15% together.
+5. Fractional shares, needed for a real $1,000 account; whole shares for any ETF that
+   cannot be bought in fractions.
+
+**For B (phase X2):** insider cluster buying and analyst revisions are backtested on
+history before they are switched on (SEC Form 4 back to 2003, free; FMP's estimate
+history with the paid plan). The Claude agents cannot be backtested honestly, because
+the models already know how past events turned out; they are judged only going forward.
 
 ## Set it up (once)
 
