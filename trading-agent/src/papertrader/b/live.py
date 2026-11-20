@@ -118,7 +118,7 @@ class AlpacaLive:
 
         amount, unit = TIMEFRAMES[timeframe]
         raw = cast(dict[str, Any], self._data.get_stock_bars(StockBarsRequest(
-            symbol_or_symbols=list(tickers), timeframe=TimeFrame(amount, TimeFrameUnit(unit)),
+            symbol_or_symbols=list(tickers), timeframe=TimeFrame(amount, TimeFrameUnit[unit]),
             start=start, end=end, feed=self._full if full_market else self._feed)))  # fmt: skip
         bars = raw.get("bars", raw) if isinstance(raw, dict) else {}
         return {t: parse_candles(rows or []) for t, rows in bars.items() if isinstance(rows, list)}
