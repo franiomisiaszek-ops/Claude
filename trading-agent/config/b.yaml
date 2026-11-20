@@ -270,7 +270,7 @@ decision:
     cooldown_minutes: 60
     cost_bps: 10               # taken off every shadow result
   postmortems:                 # X2c: "why did it move?" every morning, and careful lessons
-    enabled: false             # switched on when phase X2c is finished
+    enabled: true
     max_cases_per_day: 10
     case_model: claude-haiku-5-5
     summary_model: claude-sonnet-5-5

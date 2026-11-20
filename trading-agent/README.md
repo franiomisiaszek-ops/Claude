@@ -30,7 +30,7 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 | 7 | Learning loop + scheduler | **done** (runs by itself once the app is up, see below) |
 | 8 | Dashboard + deployment guide | **done** (see [docs/WINDOWS.md](docs/WINDOWS.md)) |
 | 9 | Run on paper for 4-8 weeks | replaced by the three-way experiment |
-| X0-X6 | **Three-way experiment**: A (this system, frozen) vs B (better decisions) vs C (ETF trend portfolio), each on its own paper account | X0-X2b **done**, X2c in progress; see [docs/EXPERIMENT.md](docs/EXPERIMENT.md) |
+| X0-X6 | **Three-way experiment**: A (this system, frozen) vs B (better decisions) vs C (ETF trend portfolio), each on its own paper account | X0-X2c **done**; see [docs/EXPERIMENT.md](docs/EXPERIMENT.md) |
 
 Right now the program can load and refresh all its data, run the research agents and the
 judge, trade their decisions on the Alpaca paper account, send everything to you on

@@ -22,7 +22,7 @@ points at the paper endpoint, and they refuse to start if two systems share a ke
 | X1 | Separate systems: own database sections, own paper accounts, own budgets; one Telegram hub | done |
 | X2 | B's better decision layer: ten switches, extra signals, the Fable test (see below) | done |
 | X2b | B's intraday scanner (see below; shadow mode first) | done |
-| X2c | B's post-mortems: "why did it move?" and careful lessons (see below) | in progress (built, switched off) |
+| X2c | B's post-mortems: "why did it move?" and careful lessons (see below) | **done** |
 | X3 | Measurement: the pre-registered test and the comparison page | not started |
 | X4 | System C: 20-year backtest first, then the weekly ETF portfolio (plan below) | not started |
 | X5 | iPhone web app over Tailscale | not started |
