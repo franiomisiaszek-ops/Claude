@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phases 1-8, experiment X1-X2b)
+## What exists today (Phases 1-8, experiment X1-X2c)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -644,6 +644,29 @@ both:        feed_gap_bps = the IEX price used vs the full market's at that minu
 | Plans | `b/models.py` (`IntradayPlan`) | One row per plan from alert to result; real trades tagged through `idea_id` / `trade_id` |
 | /skip | `hub.py` | Handled before the system argument is read (A and C are also tickers) |
 | Day-trade rule | `trading/broker.py` (`Account.daytrade_count`) | Read from Alpaca; no new intraday trade with 3 day trades on an account under $25,000 |
+
+## System B's post-mortems (X2c)
+
+`b/postmortem.py`, run by the `postmortems` job at 07:00 New York for the previous
+trading day, and used by `b/layer.py` at the judge.
+
+```
+yesterday: closed trades, big moves in held stocks, passed-on ideas that moved (decision log)
+   --select_cases (at most 10, by importance)--> Haiku write-up per case (sources marked
+   "known then" / "after"; causes with likelihoods; decision quality without hindsight)
+   --> b_postmortems (+ evidence level counted in code) --> Sonnet digest --> Telegram
+judge time: similar() past cases + explicit differences --> one comparability call
+   --> adjustment() capped by evidence, only in the lesson's direction, never upward
+       across the bar, never size or risk --> b_lesson_uses --> monthly evaluate()
+```
+
+| Piece | What it does |
+|---|---|
+| `select_cases` | Picks closed trades, big moves (vs the sector fund, in daily ranges), missed chances and dodged bullets from B's own records; skips cases already written |
+| `sources`, `render_case`, `write_case` | Shared news, filings and earnings around the case, each marked known-then or after; made-up source ids are dropped; a market/sector/noise cause is always present |
+| `similarity`, `similar`, `evidence` | Same ticker, kind of news, sector, market trend, volatility; differences listed in words; anecdote / emerging / supported from counts |
+| `DecisionLayer._lessons` | Only for trades B would place; the reviewer judges comparability; nudges recorded in `b_lesson_uses`; ranking ignores upward nudges |
+| `evaluate`, `prune` | Brier score with vs without on resolved ideas, losers vs winners stopped; the three-month rule; old and never-comparable cases retired |
 
 ## Design rules
 

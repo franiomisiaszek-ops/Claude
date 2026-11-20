@@ -31,17 +31,19 @@ from typing import Any
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from papertrader.agents.context import clip
 from papertrader.agents.schemas import AgentReport
 from papertrader.agents.snapshot import SECTOR_ETF, Snapshot
-from papertrader.b import calibrate, meta, pruning, signals, veto
+from papertrader.b import calibrate, meta, postmortem, pruning, signals, veto
 from papertrader.b.market import Trend, relative_lines, trend
-from papertrader.b.models import DecisionLog
+from papertrader.b.models import DecisionLog, LessonUse, PostMortem
 from papertrader.b.outcomes import IdeaSample, all_samples, raw_blend, resolve
 from papertrader.config import AppConfig
 from papertrader.db import models as m
 from papertrader.ingest.timeutil import new_york_date
 from papertrader.judge.schemas import JudgeDecision, RankedTrade
-from papertrader.llm.client import ClaudeClient
+from papertrader.llm.client import ClaudeClient, LLMError
+from papertrader.llm.governor import BudgetExceededError
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +71,9 @@ class DecisionLayer:
         self.clusters: dict[str, signals.Cluster] = {}
         self.context: dict[str, list[str]] = {}  # per ticker, also shown to the reviewer
         self._logs: dict[str, dict[str, Any]] = {}
+        self._before_lessons: dict[str, float] = {}
+        self._lesson_uses: list[LessonUse] = []
+        self._shown: dict[int, bool] = {}  # case id -> judged comparable at least once today
 
     # ------------------------------------------------------------------ before the judge
 
@@ -164,6 +169,11 @@ class DecisionLayer:
         for trade in decision.trades:
             trades.append(self._score(trade, snap, decision.threshold))
 
+        if cfg.postmortems.enabled and cfg.postmortems.apply_to_judge:
+            trades = await self._lessons(
+                trades, decision.threshold, reports, snap, claude, cycle_id
+            )
+
         if cfg.veto.enabled:
             live = [t for t in trades if t.status == "proposed"]
             verdicts = await veto.review(
@@ -186,8 +196,10 @@ class DecisionLayer:
                 else:
                     entry["steps"].append(f"3 review: {v.verdict}")
 
-        # Rank again on B's own numbers, and keep today's maximum.
-        trades.sort(key=lambda t: (t.status != "proposed", -t.final_confidence))
+        # Rank again on B's own numbers, and keep today's maximum. A past case's nudge
+        # upwards never decides who makes the cut: ranking uses the lower of the two.
+        trades.sort(key=lambda t: (t.status != "proposed", -min(t.final_confidence,
+                                                                self._before_lessons.get(t.ticker, 1.0))))  # fmt: skip
         limit = self.config.judge.max_trades_per_day
         ranked = []
         for index, t in enumerate(trades, start=1):
@@ -343,6 +355,77 @@ class DecisionLayer:
             "status": status, "status_reason": reason,
         })  # fmt: skip
 
+    async def _lessons(self, trades: list[RankedTrade], threshold: float, reports: Sequence[AgentReport],
+                       snap: Snapshot, claude: ClaudeClient, cycle_id: int) -> list[RankedTrade]:  # fmt: skip
+        """X2c: similar past cases, judged for comparability, may nudge a trade's confidence."""
+        pm = self.cfg.postmortems
+        bar = self.cfg.confidence.calibrated_threshold if self.calibrator.active else threshold
+        by_id = {r.report_id: r for r in reports}
+        items: list[tuple[RankedTrade, postmortem.Shown]] = []
+        with self.sessions() as session:
+            for t in trades:
+                if t.status != "proposed":
+                    continue  # a past case can only make B more careful about a trade it would place
+                member = snap.members.get(t.ticker)
+                ind = snap.indicators.get(t.ticker)
+                conditions = {
+                    "event_types": sorted({e for i in t.supporting if (r := by_id.get(i)) and (e := r.event_type)}),
+                    "sector": member.sector if member else None,
+                    "market_trend": self.market.label if self.market else None,
+                    "vol": postmortem.vol_bucket(ind.atr_pct if ind else None),
+                    "direction": "long" if t.action == "buy" else "short",
+                }  # fmt: skip
+                found = postmortem.similar(session, pm, t.ticker, conditions, snap.as_of)
+                if found:
+                    items.append((t, postmortem.Shown(t.ticker, conditions, found)))
+        if not items:
+            return trades
+        try:
+            answer = await claude.structured(
+                purpose="lesson_compare", model=pm.summary_model, effort="medium", max_tokens=8000,
+                system=postmortem.COMPARE, user=postmortem.render_compare(items),
+                output=postmortem.CompareOutput, cycle_id=cycle_id,
+            )  # fmt: skip
+            verdicts = {(v.ticker.strip().upper(), v.case_id): v for v in answer.output.verdicts}
+        except (LLMError, BudgetExceededError) as exc:
+            log.warning("lessons not applied", extra={"error": str(exc)})
+            verdicts = {}  # fails open: no change
+        changed: dict[str, RankedTrade] = {}
+        for t, shown in items:
+            total, comparable, why = 0.0, [], []
+            for case, _, _ in shown.cases:
+                self._shown.setdefault(case.id, False)
+                v = verdicts.get((t.ticker, case.id))
+                if v is None or not v.comparable:
+                    continue
+                self._shown[case.id] = True
+                comparable.append(case.id)
+                total += postmortem.adjustment(pm, case, v.change)
+                why.append(f"case {case.id}: {clip(v.why, 120)}")
+            total = round(max(-pm.cap_supported, min(pm.cap_supported, total)), 4)
+            before = t.final_confidence
+            after = round(min(max(before + total, 0.0), 1.0), 4)
+            update: dict[str, Any] = {"final_confidence": after}
+            status = t.status
+            if total < 0 and after < bar:
+                status = "below_threshold"
+                update |= {"status": status, "status_reason":
+                           f"past cases lowered it to {after:.2f}, below {bar:.2f} ({'; '.join(why)})"}  # fmt: skip
+            self._before_lessons[t.ticker] = before
+            entry = self._logs[t.ticker]
+            entry["steps"].append(
+                f"X2c lessons: {total:+.2f} from cases {comparable or 'none comparable'}"
+            )
+            self._lesson_uses.append(LessonUse(
+                as_of=snap.as_of, ticker=t.ticker, action=t.action, horizon_days=t.horizon_days,
+                case_ids=[c.id for c, _, _ in shown.cases], comparable_ids=comparable, adjustment=total,
+                confidence_without=before, confidence_with=after, status_without=t.status, status_with=status,
+                reasons="; ".join(why),
+            ))  # fmt: skip
+            if total:
+                changed[t.ticker] = t.model_copy(update=update)
+        return [changed.get(t.ticker, t) for t in trades]
+
     # ------------------------------------------------------------------ the record
 
     def record(self, session: Session, row: m.JudgeDecision) -> None:
@@ -358,5 +441,12 @@ class DecisionLayer:
             values.setdefault("b_target", entry["a_target"])
             session.add(DecisionLog(decision_id=row.id, idea_id=idea.id, cycle_id=row.cycle_id,
                                     as_of=row.as_of, **values))  # fmt: skip
+        for use in self._lesson_uses:
+            session.add(use)
+        for case_id, comparable in self._shown.items():
+            case = session.get(PostMortem, case_id)
+            if case is not None:
+                case.times_shown += 1
+                case.times_comparable += 1 if comparable else 0
         if self.pruned:
             log.info("agents left out", extra={"agents": self.pruned})

@@ -17,6 +17,7 @@ schedule:
   research_agents: "07:30"
   score_and_judge: "08:25"    # 5 minutes after A: B judges a copy of A's research
   b_signals: "08:00"          # B's extra signals (insiders, options, analysts)
+  b_postmortems: "07:00"      # B's "why did it move?" for the day before
   morning_brief: "08:45"      # Telegram
   place_orders: "09:35"       # never earlier than 09:35
   monitor_interval_minutes: 10
@@ -268,3 +269,16 @@ decision:
     big_move_atr: 1.0
     cooldown_minutes: 60
     cost_bps: 10               # taken off every shadow result
+  postmortems:                 # X2c: "why did it move?" every morning, and careful lessons
+    enabled: false             # switched on when phase X2c is finished
+    max_cases_per_day: 10
+    case_model: claude-haiku-5-5
+    summary_model: claude-sonnet-5-5
+    big_move_ranges: 2.0       # a held stock moving 2+ daily ranges beyond its sector gets a case
+    lookback_days: 5           # ideas B passed on in the last 5 trading days are checked
+    apply_to_judge: true       # similar past cases shown with their differences; capped nudges
+    max_similar: 3
+    cap_anecdote: 0.03         # largest nudge from an anecdote or an emerging lesson
+    cap_supported: 0.07        # largest nudge from a supported lesson
+    case_max_age_days: 365
+    monthly_usd: 5             # their share of B's $30

@@ -67,6 +67,7 @@ class JobSpec:
 SPECS: tuple[JobSpec, ...] = (
     JobSpec("ingest", "load overnight news, filings, prices and macro data", lambda c: c.schedule.ingest),
     JobSpec("research_agents", "the research agents write their reports", lambda c: c.schedule.research_agents),
+    JobSpec("postmortems", "system B: yesterday's \"why did it move?\" cases and digest", lambda c: c.schedule.b_postmortems),
     JobSpec("b_signals", "system B's extra signals: insider clusters, options, analysts", lambda c: c.schedule.b_signals),
     JobSpec("judge", "pattern-model scores and the judge's decision", lambda c: c.schedule.score_and_judge),
     JobSpec("morning_brief", "Telegram morning brief", lambda c: c.schedule.morning_brief),
@@ -82,10 +83,11 @@ SPECS: tuple[JobSpec, ...] = (
 BY_NAME = {spec.name: spec for spec in SPECS}
 
 # B reuses A's research and does not load market data; C gets its own jobs in Phase X4.
-B_ONLY = ("b_signals", "intraday", "fable_shadow")
+B_ONLY = ("postmortems", "b_signals", "intraday", "fable_shadow")
 SYSTEM_JOBS: dict[str, tuple[str, ...]] = {
     "A": tuple(spec.name for spec in SPECS if spec.name not in B_ONLY),
     "B": (
+        "postmortems",
         "b_signals",
         "judge",
         "morning_brief",
@@ -107,6 +109,8 @@ def specs_for(system: str, config: AppConfig | None = None) -> tuple[JobSpec, ..
         names.discard("fable_shadow")  # only scheduled while the test is switched on
     if config is not None and not config.decision.intraday.enabled:
         names.discard("intraday")
+    if config is not None and not config.decision.postmortems.enabled:
+        names.discard("postmortems")
     return tuple(spec for spec in SPECS if spec.name in names)
 
 
@@ -596,6 +600,19 @@ class Jobs:
         live = self._live()
         return None if live is None else score_plans(self.sessions, self.config, live, self.now())
 
+    def job_postmortems(self) -> dict[str, Any]:
+        from papertrader.b.postmortem import run_day
+
+        now = self.now()
+        day = new_york_date(now) - timedelta(days=1)
+        while self.trading_day(day) is None:  # the last trading day before today
+            day -= timedelta(days=1)
+        details = asyncio.run(run_day(self.sessions, self.config, self._need_claude(), day, now))
+        details["summary"] = (
+            details.get("note") or f"{details['cases']} post-mortem(s) for {day:%a %d %b}"
+        )
+        return details
+
     def job_b_signals(self) -> dict[str, Any]:
         from papertrader.b.daily import run_signals
 
@@ -687,6 +704,37 @@ class Jobs:
             return f"{result.status}: {result.detail}"
 
         details["lessons"] = step("lessons", lessons)
+
+        def b_extras() -> str:
+            from papertrader.b.daily import fable_comparison
+            from papertrader.b.postmortem import evaluate
+            from papertrader.b.scanner import results
+
+            notes = []
+            with self.sessions() as session:
+                if self.config.decision.postmortems.enabled:
+                    row = evaluate(session, self.config, now)
+                    if row is not None:
+                        notes.append(f"Lessons check: {row.verdict}")
+                if self.config.decision.intraday.enabled:
+                    shadow = results(session, new_york_date(now) - timedelta(days=7))[
+                        self.config.decision.intraday.mode
+                    ]
+                    if shadow["plans"]:
+                        notes.append(f"Intraday scanner ({self.config.decision.intraday.mode}), last 7 days: "
+                                     f"{shadow['plans']} plans, {shadow['traded']} filled, {shadow['wins']} won, "
+                                     f"total {shadow['sum_net']:+.2%} after costs")  # fmt: skip
+                if self.config.decision.fable_shadow.enabled:
+                    fable = fable_comparison(self.runtime.engine, session)
+                    if fable["fable"].get("scored"):
+                        notes.append(f"Fable test: hit rate {fable['fable']['hit_rate']:.0%} on {fable['fable']['scored']} "
+                                     f"calls vs Sonnet {fable['sonnet'].get('hit_rate', 0):.0%} on the same days")  # fmt: skip
+                session.commit()
+            extra.extend(notes)
+            return "; ".join(notes) or "nothing to report"
+
+        if self.system == "B":
+            details["b"] = step("system B", b_extras)
         if problems:
             extra.append("Problems: " + "; ".join(problems))
         with self.sessions() as session:

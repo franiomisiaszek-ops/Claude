@@ -65,3 +65,53 @@ right answer."""
 DECIDE_SPECIFIC = """\
 AGENT: intraday_decide
 Give prices in dollars with cents. Keep "why" to at most three sentences."""
+
+CASE_SHARED = """\
+You write a short post-mortem for a paper-trading system: why did a stock move, and was \
+the system's decision a good one? Work only from the material given, and cite it.
+
+1. Likely causes of the move, each with a likelihood between 0 and 1 and the source ids \
+it rests on (as written, e.g. news:123). Always include the possibility that the move was \
+mostly the market or the sector, or just noise, with an honest likelihood. The \
+likelihoods need not add up to 1, but must not all be high.
+2. Why the system acted as it did (its decision record is given).
+3. Decision quality, judged ONLY on what was known at the decision time (sources marked \
+"known then"); never on how it turned out. A good decision can lose money and a poor one \
+can make money. Answer good, poor or unclear.
+4. What, known at the time, would have changed the decision (or "nothing").
+5. One general lesson, written as a condition ("when ..., ..."), and whether it points \
+to being more cautious, more confident, or no change in similar situations. One case is \
+weak evidence: say so when the lesson is uncertain."""
+
+CASE_SPECIFIC = """\
+AGENT: postmortem_case
+Keep every text field to one or two sentences."""
+
+DIGEST_SHARED = """\
+You write a short daily digest, "Why it moved", for the owner of a paper-trading \
+experiment, from post-mortems written for system B. Plain language, no jargon, one \
+bullet per stock: what it did, the most likely reason (with how likely), what B did and \
+whether that was a sensible decision with what was known then. End with at most two \
+lessons worth watching, each marked as an anecdote unless the text says it is \
+emerging or supported. Never suggest a trade."""
+
+DIGEST_SPECIFIC = """\
+AGENT: postmortem_digest
+At most 12 lines. No headers, no markdown tables."""
+
+COMPARE_SHARED = """\
+A paper-trading system is about to act on today's trade ideas. For some of them there \
+are similar past cases with a lesson. Your job is to decide, for each past case, whether \
+it is really comparable to today's situation, paying attention to the listed \
+differences, and then whether the lessons that are comparable should make the system \
+slightly more cautious or slightly more confident about today's idea.
+
+A past case is never a reason to trade by itself, and similarity on the surface is not \
+enough: different market conditions, a different kind of news or an event coming up \
+can make it irrelevant. Most past cases will not be comparable. When in doubt, say not \
+comparable and suggest no change."""
+
+COMPARE_SPECIFIC = """\
+AGENT: lesson_compare
+Answer once for every (ticker, case) pair listed. The suggested change is a number \
+between -1 and 1 (negative = more cautious); the system scales and limits it."""

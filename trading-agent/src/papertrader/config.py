@@ -82,6 +82,7 @@ class ScheduleConfig(_Strict):
     score_and_judge: time = time(8, 20)
     b_signals: time = time(8, 0)  # system B's extra signals, before its judge
     b_fable: time = time(10, 30)  # system B's Fable test (never trades, so any time works)
+    b_postmortems: time = time(7, 0)  # system B: yesterday's "why did it move?" cases
     morning_brief: time = time(8, 45)
     place_orders: time = time(9, 35)
     monitor_interval_minutes: int = Field(default=10, ge=1, le=60)
@@ -517,6 +518,27 @@ class IntradaySwitch(_Strict):
         return self
 
 
+class PostMortemSwitch(_Strict):
+    """X2c. "Why did it move?" post-mortems, and careful lessons for the judge."""
+
+    enabled: bool = False
+    max_cases_per_day: int = Field(default=10, ge=1, le=30)
+    case_model: str = "claude-haiku-5-5"
+    summary_model: str = "claude-sonnet-5-5"
+    big_move_ranges: float = Field(
+        default=2.0, gt=0
+    )  # a move this many daily ranges beyond the sector
+    lookback_days: int = Field(
+        default=5, ge=1, le=20
+    )  # ideas this recent are checked for missed chances
+    apply_to_judge: bool = False  # show similar past cases to the judge, with capped adjustments
+    max_similar: int = Field(default=3, ge=1, le=10)
+    cap_anecdote: float = Field(default=0.03, ge=0, le=0.05)  # also for "emerging"
+    cap_supported: float = Field(default=0.07, ge=0, le=0.10)
+    case_max_age_days: int = Field(default=365, ge=30)
+    monthly_usd: float = Field(default=5.0, gt=0)  # their share of B's Claude budget
+
+
 class DecisionConfig(_Strict):
     """System B's decision layer. Everything off is exactly system A's behaviour."""
 
@@ -532,6 +554,7 @@ class DecisionConfig(_Strict):
     meta_label: MetaLabelSwitch = MetaLabelSwitch()
     fable_shadow: FableShadow = FableShadow()
     intraday: IntradaySwitch = IntradaySwitch()
+    postmortems: PostMortemSwitch = PostMortemSwitch()
 
     @property
     def active(self) -> bool:
@@ -577,6 +600,11 @@ class AppConfig(_Strict):
             models.add(self.decision.fable_shadow.model)
         if self.decision.intraday.enabled:
             models |= {self.decision.intraday.screen_model, self.decision.intraday.decide_model}
+        if self.decision.postmortems.enabled:
+            models |= {
+                self.decision.postmortems.case_model,
+                self.decision.postmortems.summary_model,
+            }
         for name in KNOWN_AGENTS:
             settings = self.agents.for_agent(name)
             if settings.enabled:

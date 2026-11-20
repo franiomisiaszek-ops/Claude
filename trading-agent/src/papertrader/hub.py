@@ -38,6 +38,7 @@ HUB_HELP = (
     .replace("/resume -", "/resume A|B|C -", 1)
     + "\nWithout a system, /status /positions /pnl /brief answer for all three."
     + "\n/skip TICKER - cancel system B's planned intraday trade before it is placed"
+    + '\n/why TICKER - system B\'s latest "why did it move?" post-mortem for a stock'
 )
 
 
@@ -160,6 +161,8 @@ class HubBot:
         args = parts[1:]
         if command == "/skip":  # before the system is read: A and C are also tickers
             return self.skip(args)
+        if command == "/why":
+            return self.why(args)
         system = args[0].upper() if args and args[0].upper() in SYSTEMS else None
         rest = " ".join(args[1:] if system else args)
         if command in ("/start", "/help"):
@@ -185,3 +188,14 @@ class HubBot:
         if "B" not in self.views:
             return "System B is not set up yet."
         return f"{tag('B')} " + skip(self.views["B"].sessions, args[0], self.now())
+
+    def why(self, args: list[str]) -> str:
+        from papertrader.b.postmortem import latest_why
+
+        if len(args) == 2 and args[0].upper() == "B":
+            args = args[1:]
+        if len(args) != 1:
+            return "Say which stock: /why NVDA"
+        if "B" not in self.views:
+            return "System B is not set up yet."
+        return f"{tag('B')} " + latest_why(self.views["B"].sessions, args[0])

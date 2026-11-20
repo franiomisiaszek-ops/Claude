@@ -21,8 +21,8 @@ points at the paper endpoint, and they refuse to start if two systems share a ke
 | X0 | Claude Code helper pool (`.claude/` folder, used while building, never by the running program) | done |
 | X1 | Separate systems: own database sections, own paper accounts, own budgets; one Telegram hub | done |
 | X2 | B's better decision layer: ten switches, extra signals, the Fable test (see below) | done |
-| X2b | B's intraday scanner (see below; shadow mode first) | **done** |
-| X2c | B's post-mortems ("why did it move?") | not started |
+| X2b | B's intraday scanner (see below; shadow mode first) | done |
+| X2c | B's post-mortems: "why did it move?" and careful lessons (see below) | in progress (built, switched off) |
 | X3 | Measurement: the pre-registered test and the comparison page | not started |
 | X4 | System C: 20-year backtest first, then the weekly ETF portfolio (plan below) | not started |
 | X5 | iPhone web app over Tailscale | not started |
@@ -161,6 +161,54 @@ Honest expectation: short-term set-ups like these are hard to profit from after 
 and most of what the rules find will be passed on. That is why it starts in shadow mode
 and has its own scorecard.
 
+## B's post-mortems: "why did it move?" (phase X2c)
+
+Every morning at 07:00 New York time (13:00 in Poland) B looks back at the previous
+trading day and writes up to 10 short post-mortems, most important first:
+
+* **closed trades**,
+* **big moves** in stocks it holds (2+ typical daily ranges beyond the sector),
+* **missed chances**: ideas it passed on or blocked that then went the predicted way,
+* **dodged bullets**: ideas it passed on or blocked that then went the other way.
+
+Each one says how the stock moved against SPY and its sector, the **likely causes with
+how likely each is and the news or filings behind it** (the market, the sector or plain
+noise are always among them), why B did what it did, whether that was **a good decision
+with what was known at the time** (a good decision can lose money; hindsight does not
+count), what would have changed it, and one lesson written as a condition ("when ...,
+...").
+
+On Telegram you get a short **"Why it moved"** digest after it runs, and `/why NVDA`
+shows the latest post-mortem for a stock.
+
+**Learning from it, without copying the past.** The point is not "it happened before, so
+buy again". When B is about to trade, the most similar past cases are shown to a reviewer
+**together with the differences from today** (a different kind of news, a different
+market trend, different volatility), and the reviewer decides whether each case is really
+comparable. Only comparable cases count, and only a little:
+
+| Evidence | When | Largest nudge to the confidence |
+|---|---|---|
+| anecdote | one case | 0.03 |
+| emerging | 3+ similar cases, 60%+ pointing the same way | 0.03 |
+| supported | 8+ similar cases, 70%+ pointing the same way | 0.07 |
+
+The level is counted by the program, never claimed by the model. A past case can make B
+more careful (and lower a trade below its bar), but it **never turns a "no" into a
+"yes"**, never makes a trade bigger and never loosens a stop or a risk limit. Old cases
+(over a year) and cases that keep being judged not comparable are retired.
+
+**Does it help?** Every use is recorded, and once a month the same ideas are scored with
+and without the lessons. The result comes in the weekly message. After three months
+without help, the recommendation is to switch the lessons off (the post-mortems can stay).
+
+```bash
+docker compose exec app-b papertrader postmortems
+```
+
+Cost: a cheap model per case and one digest a day, capped at $5 a month of B's $30. The
+"Post-mortems" page comes with the iPhone web app (phase X5).
+
 ## Plan for system C (phase X4)
 
 C's rules are set with a 20-year backtest **before** it trades, then frozen.
@@ -295,6 +343,7 @@ every 10 minutes).
 * Every Telegram message starts with `[A]`, `[B]` or `[C]`.
 * Commands take a system: `/pnl B`, `/positions A`, `/pause B earnings week`, `/resume B`.
   `/skip NVDA` cancels B's planned intraday trade in NVDA before it is placed.
+  `/why NVDA` shows B's latest "why did it move?" post-mortem for NVDA.
   Without one, `/status`, `/positions`, `/pnl` and `/brief` answer for every system.
   `/pause` and `/resume` always need the system.
 * Logs: `docker compose logs -f app` (A), `docker compose logs -f app-b` (B),
@@ -309,6 +358,7 @@ every 10 minutes).
 | Time | What |
 |---|---|
 | 06:30 | A loads the shared market data (news, filings, prices) for everyone |
+| 07:00 | B's post-mortems of the day before, then the "Why it moved" digest |
 | 07:30 | A's research agents |
 | 08:00 | B's extra signals (insider clusters; options and analyst data if switched on) |
 | 08:20 | A's pattern model and judge |
@@ -346,6 +396,7 @@ So the comparison stays fair, A must not change during the experiment:
 | 2026-11-20 | A frozen at commit `e54f521` | A |
 | 2026-11-20 | B's decision layer (phase X2) | B only |
 | 2026-11-20 | B's intraday scanner, in shadow mode (phase X2b) | B only |
+| 2026-11-20 | B's post-mortems and capped lessons (phase X2c) | B only |
 
 ## How the data is kept apart (for the curious)
 

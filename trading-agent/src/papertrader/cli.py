@@ -1315,3 +1315,35 @@ def scanner(days: int = 30) -> None:
         "Live feed: IEX (free). A median gap above 5 bps, or many plans that do not fill, "
         "would make the $99/month SIP feed worth considering."
     )
+
+
+@app.command()
+def postmortems(days: int = 7) -> None:
+    """System B: the "why did it move?" cases of the last days, and the lessons check."""
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from papertrader.b.models import Backtest, PostMortem
+    from papertrader.db.types import utcnow
+    from papertrader.ingest.timeutil import new_york_date
+
+    runtime = _system_b()
+    pm = runtime.config.decision.postmortems
+    typer.echo(f"Post-mortems: {'ON' if pm.enabled else 'off'}; lessons shown to the judge: "
+               f"{'ON' if pm.apply_to_judge else 'off'}")  # fmt: skip
+    since = new_york_date(utcnow()) - timedelta(days=days)
+    with runtime.session_factory() as session:
+        cases = session.scalars(select(PostMortem).where(PostMortem.day >= since)
+                                .order_by(PostMortem.day.desc(), PostMortem.id)).all()  # fmt: skip
+        check = session.scalars(select(Backtest).where(Backtest.kind == "lessons_eval")
+                                .order_by(Backtest.ran_at.desc()).limit(1)).first()  # fmt: skip
+        total = len(
+            session.scalars(select(PostMortem.id).where(PostMortem.retired.is_(False))).all()
+        )
+    typer.echo(f"{len(cases)} case(s) in the last {days} days; {total} kept in the library")
+    for c in cases:
+        top = c.causes[0]["cause"] if c.causes else "unclear"
+        typer.echo(f"  {c.day:%d %b} {c.ticker:<6} {c.kind:<12} {c.move_pct:+.1%} · decision {c.decision_quality:<7} "
+                   f"· {c.evidence:<9} · {top[:70]}")  # fmt: skip
+    typer.echo("Lessons check: " + (check.verdict if check else "not run yet (monthly)"))

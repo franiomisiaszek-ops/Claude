@@ -51,6 +51,10 @@ def test_switches_and_the_insider_backtest_from_the_command_line(project: Path) 
     assert scanned.exit_code == 0, scanned.output
     assert "Scanner: ON, mode shadow, every 5 minutes 09:45-15:30 New York" in scanned.output
     assert "Today: 0 plan(s)" in scanned.output
+    cases = runner.invoke(app, ["--system", "B", "postmortems"])
+    assert cases.exit_code == 0, cases.output
+    assert "Post-mortems: off; lessons shown to the judge: ON" in cases.output
+    assert "Lessons check: not run yet (monthly)" in cases.output
 
 
 def ideas(n: int, rule: str) -> list[Resolved]:

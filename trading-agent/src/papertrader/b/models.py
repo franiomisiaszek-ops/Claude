@@ -193,3 +193,72 @@ class IntradayPlan(BBase):
     feed_gap_bps: Mapped[float | None] = mapped_column(
         Float
     )  # live (IEX) price vs the full market's
+
+
+class PostMortem(BBase):
+    """X2c. One "why did it move?" case: what happened, the likely causes, what B did and
+    whether that was a good decision with what was known then, and the lesson.
+
+    kind: closed_trade | big_move (in a held stock) | missed (passed on, then it went the
+    predicted way) | dodged (passed on or blocked, then it went against).
+    evidence: anecdote | emerging | supported, decided in code from how many similar
+    cases point the same way, never by the model.
+    """
+
+    __tablename__ = "b_postmortems"
+
+    id: Mapped[int] = _pk()
+    day: Mapped[date] = mapped_column(Date, index=True)  # the trading day it is about
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    kind: Mapped[str] = mapped_column(String(16))
+    ticker: Mapped[str] = mapped_column(String(16), index=True)
+    sector: Mapped[str | None] = mapped_column(String(64))
+    decided_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime
+    )  # when B decided (no hindsight)
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    move_pct: Mapped[float] = mapped_column(Float)
+    move_vs_spy: Mapped[float | None] = mapped_column(Float)
+    move_vs_sector: Mapped[float | None] = mapped_column(Float)
+    what_b_did: Mapped[str] = mapped_column(Text)
+    causes: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONType, default=list
+    )  # cause, likelihood, sources
+    why_b_acted: Mapped[str] = mapped_column(Text, default="")
+    decision_quality: Mapped[str] = mapped_column(
+        String(16)
+    )  # good | poor | unclear (with what was known)
+    outcome: Mapped[str] = mapped_column(String(16))  # good | bad
+    what_would_change: Mapped[str] = mapped_column(Text, default="")
+    lesson: Mapped[str] = mapped_column(Text, default="")
+    adjust: Mapped[str] = mapped_column(
+        String(16), default="no_change"
+    )  # more_cautious | more_confident | no_change
+    conditions: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
+    evidence: Mapped[str] = mapped_column(String(16), default="anecdote")
+    times_shown: Mapped[int] = mapped_column(Integer, default=0)
+    times_comparable: Mapped[int] = mapped_column(Integer, default=0)
+    retired: Mapped[bool] = mapped_column(Boolean, default=False)
+    model: Mapped[str] = mapped_column(String(64), default="")
+
+
+class LessonUse(BBase):
+    """X2c. Each time past cases changed (or could have changed) a judged idea, so the
+    lessons can be measured: the same ideas scored with and without them."""
+
+    __tablename__ = "b_lesson_uses"
+
+    id: Mapped[int] = _pk()
+    as_of: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    ticker: Mapped[str] = mapped_column(String(16))
+    action: Mapped[str] = mapped_column(String(16))
+    horizon_days: Mapped[int] = mapped_column(Integer)
+    case_ids: Mapped[list[int]] = mapped_column(JSONType, default=list)
+    comparable_ids: Mapped[list[int]] = mapped_column(JSONType, default=list)
+    adjustment: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence_without: Mapped[float] = mapped_column(Float)
+    confidence_with: Mapped[float] = mapped_column(Float)
+    status_without: Mapped[str] = mapped_column(String(32))
+    status_with: Mapped[str] = mapped_column(String(32))
+    reasons: Mapped[str] = mapped_column(Text, default="")
