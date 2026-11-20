@@ -216,8 +216,12 @@ async def check_held_positions(
     engine: TradingEngine,
     claude: Callable[[], ClaudeClient | None],
     now: datetime,
+    refresh_news: bool = True,
 ) -> list[str]:
     """Fetch fresh news for held stocks, then review any with bad news (needs Claude).
+
+    `refresh_news=False` (systems B and C) uses the stored news only: they read the shared
+    market data and never write to it.
 
     Shared by `trade monitor` and the scheduled monitor. Returns lines for the log.
     """
@@ -232,7 +236,7 @@ async def check_held_positions(
         return []
     notes: list[str] = []
     async with open_context(config, settings, sessions) as ctx:
-        if ctx.alpaca is not None:
+        if ctx.alpaca is not None and refresh_news:
             try:  # a news outage must never stop the monitor
                 await ingest_alpaca_news(ctx, held, start=now - timedelta(days=3))
                 with sessions() as session:

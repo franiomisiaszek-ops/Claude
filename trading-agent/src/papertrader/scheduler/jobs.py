@@ -73,6 +73,26 @@ SPECS: tuple[JobSpec, ...] = (
 )  # fmt: skip
 BY_NAME = {spec.name: spec for spec in SPECS}
 
+# B reuses A's research and does not load market data; C gets its own jobs in Phase X4.
+SYSTEM_JOBS: dict[str, tuple[str, ...]] = {
+    "A": tuple(spec.name for spec in SPECS),
+    "B": (
+        "judge",
+        "morning_brief",
+        "place_orders",
+        "monitor",
+        "reconcile_eod",
+        "resolve_outcomes",
+        "weekly",
+    ),
+    "C": (),
+}
+
+
+def specs_for(system: str) -> tuple[JobSpec, ...]:
+    names = SYSTEM_JOBS[system]
+    return tuple(spec for spec in SPECS if spec.name in names)
+
 
 @dataclass(frozen=True)
 class RunOutcome:
@@ -106,6 +126,10 @@ class Jobs:
         self.trading_lock = threading.Lock()  # orders, monitor and reconcile never overlap
         self._days: dict[date, TradingDay | None] = {}
         self._clock_checked: datetime | None = None
+        self.system = runtime.system
+        self.specs = specs_for(runtime.system)
+        # Only A loads market data; B and C read it and never write to it.
+        self.writes_market_data = runtime.system == "A"
 
     # ------------------------------------------------------------------ resources
 
@@ -189,7 +213,7 @@ class Jobs:
 
     def run(self, name: str, *, manual: bool = False) -> RunOutcome:
         """Run one job now, recording it. `manual` runs are never skipped as not due."""
-        if name not in BY_NAME:
+        if name not in {spec.name for spec in self.specs}:
             raise KeyError(name)
         now = self.now()
         day = new_york_date(now)
@@ -274,7 +298,7 @@ class Jobs:
         from papertrader.model.llm_text import submit
 
         limit = self.config.learning.text_batch_limit
-        api = self._anthropic() if limit else None
+        api = self._anthropic() if limit and self.writes_market_data else None
         if api is None:
             return "off"
         governor = CostGovernor(self.sessions, self.config.budget)
@@ -293,7 +317,7 @@ class Jobs:
     def _collect_text_labels(self) -> str:
         from papertrader.model.llm_text import collect
 
-        api = self._anthropic()
+        api = self._anthropic() if self.writes_market_data else None
         if api is None:
             return "off"
         try:
@@ -343,8 +367,9 @@ class Jobs:
         from papertrader.research.cycle import run_judge_stage
 
         claude = self._need_claude()
-        labels = self._collect_text_labels()  # today's headlines, before the model scores them
         now = self.now()
+        copied = self._copy_research_from_a(now) if self.system == "B" else None
+        labels = self._collect_text_labels()  # today's headlines, before the model scores them
         with self.sessions() as session:
             positions = open_positions(session)
             lessons = latest_lessons(session, self.config, now)
@@ -354,6 +379,7 @@ class Jobs:
         proposed = [t.ticker for t in trades if t.status == "proposed"]
         details = {"cycle_id": result.cycle_id, "trades": len(trades), "to_trade": proposed,
                    "lessons": bool(lessons), "text_labels": labels, "notes": result.notes,
+                   "reports_from_a": copied,
                    "cost_usd": round(result.cost_usd, 4),
                    "summary": f"{len(trades)} ideas, {len(proposed)} above the bar"}  # fmt: skip
         if result.status == "skipped":
@@ -361,6 +387,20 @@ class Jobs:
         if result.status == "failed" or result.decision is None:
             raise JobFailed("; ".join(result.notes) or "the judge did not decide", details)
         return details
+
+    def _copy_research_from_a(self, now: datetime) -> int:
+        """B starts from A's agent reports of today (see research/reuse.py)."""
+        from papertrader.research.reuse import ReuseRefused, copy_a_research
+
+        try:
+            copied = copy_a_research(
+                self.runtime.engine, self.sessions, self.config, new_york_date(now)
+            )
+        except ReuseRefused as exc:
+            raise JobFailed(str(exc)) from exc
+        if copied is None:
+            raise JobSkipped("system A has not finished today's research yet", alert=True)
+        return copied[1]
 
     def job_morning_brief(self) -> dict[str, Any]:
         from papertrader.notify.reports import build_brief, open_trade_labels
@@ -420,7 +460,7 @@ class Jobs:
             report = engine.monitor()
             notes = asyncio.run(check_held_positions(
                 config=self.config, settings=self.runtime.settings, sessions=self.sessions,
-                engine=engine, claude=self.claude, now=self.now(),
+                engine=engine, claude=self.claude, now=self.now(), refresh_news=self.writes_market_data,
             ))  # fmt: skip
         return {"equity": report.equity, "day_change_pct": report.day_change_pct,
                 "opened": report.sync.opened, "closed": report.sync.closed,
@@ -439,7 +479,9 @@ class Jobs:
         from papertrader.learning.stats import compute_stats
 
         details: dict[str, Any] = {}
-        if refresh_prices:  # today's closing prices, so today's horizons can be scored
+        if (
+            refresh_prices and self.writes_market_data
+        ):  # today's closes, so today's horizons can be scored
             from papertrader.ingest.context import open_context
             from papertrader.ingest.pipeline import run_daily
 
@@ -502,6 +544,8 @@ class Jobs:
         extra.append("Agent weights: " + (", ".join(moved) if moved else "unchanged"))
 
         def retrain() -> str:
+            if self.system != "A":
+                return "skipped: only system A uses the pattern model"
             try:
                 result = run_training(
                     self.sessions, self.config, as_of=now, data_dir=self.runtime.settings.data_dir
@@ -545,7 +589,7 @@ class Jobs:
         grace = timedelta(minutes=self.config.schedule.heartbeat_grace_minutes)
         trading = self.trading_day(day)
         due = []
-        for spec in SPECS:
+        for spec in self.specs:
             if spec.at is None:
                 continue
             if spec.weekly:

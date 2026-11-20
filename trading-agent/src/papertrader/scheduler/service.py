@@ -30,7 +30,7 @@ from papertrader.notify.service import (
     telegram_ready,
 )
 from papertrader.runtime import Runtime
-from papertrader.scheduler.jobs import SPECS, Jobs
+from papertrader.scheduler.jobs import Jobs
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ def add_schedule(scheduler: BlockingScheduler, runtime: Runtime, jobs: Jobs) -> 
     cfg = runtime.config.schedule
     tz = ZoneInfo(cfg.timezone)
     grace = cfg.heartbeat_grace_minutes * 60
-    for spec in SPECS:
+    for spec in jobs.specs:
         if spec.at is None:  # the monitor: every N minutes; it checks the market hours itself
             offset = cfg.place_orders.minute % cfg.monitor_interval_minutes
             trigger = CronTrigger(day_of_week="mon-fri", hour="9-15",
@@ -135,3 +135,58 @@ def run_forever(runtime: Runtime) -> None:
     if bot is not None:
         bot.stop()
     log.info("scheduler stopped")
+
+
+HUB_REFRESH_MINUTES = 10
+
+
+def run_hub(runtime: Runtime) -> None:
+    """Telegram for all three systems: send every outbox (tagged) and answer commands."""
+    from papertrader.hub import HubBot, flush_all, open_views
+
+    settings = runtime.settings
+    chat = str(settings.telegram_chat_id or "")
+    if settings.telegram_bot_token is None or not chat:
+        raise SystemExit("The hub needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env.")
+    views = open_views(settings)
+    log.info("hub started", extra={"systems": sorted(views)})
+    telegram = runtime.config.telegram
+
+    def send() -> None:
+        client = make_client(settings)
+        try:
+            for name, report in flush_all(views, client, chat, telegram).items():
+                if report.sent or report.failed or report.dropped or report.setup_problem:
+                    log.info("telegram outbox", extra={"system": name, "sent": report.sent, "failed": report.failed,
+                                                       "dropped": report.dropped, "problem": report.setup_problem})  # fmt: skip
+        finally:
+            client.close()
+
+    def refresh() -> None:
+        """Pick up B or C once they have been set up, without a restart."""
+        for name, view in open_views(settings).items():
+            if name not in views:
+                views[name] = view
+                bot.bots[name] = HubBot(
+                    {name: view}, bot.client, chat, settings, telegram=telegram
+                ).bots[name]
+                log.info("hub now serves another system", extra={"system": name})
+
+    bot = HubBot(views, make_client(settings), chat, settings, telegram=telegram)
+    scheduler = BlockingScheduler(timezone=ZoneInfo(runtime.config.schedule.timezone))
+    scheduler.add_job(send, "interval", seconds=telegram.outbox_interval_seconds, id="telegram_outbox",
+                      max_instances=1, coalesce=True)  # fmt: skip
+    scheduler.add_job(refresh, "interval", minutes=HUB_REFRESH_MINUTES, id="refresh_systems",
+                      max_instances=1, coalesce=True)  # fmt: skip
+    thread = BotThread(bot)  # type: ignore[arg-type]
+
+    def _stop(signum: int, _frame: FrameType | None) -> None:
+        log.info("hub shutdown requested", extra={"signal": signal.Signals(signum).name})
+        scheduler.shutdown(wait=False)
+
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    thread.start()
+    scheduler.start()
+    thread.stop()
+    log.info("hub stopped")

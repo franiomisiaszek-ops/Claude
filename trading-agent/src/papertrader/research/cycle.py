@@ -199,7 +199,7 @@ def _finish(
              "dropped_claims": r.dropped_claims, "detail": r.detail[:200]}
             for r in result.runs
         ]  # fmt: skip
-        cycle.notes = {
+        cycle.notes = before | {  # keeps other notes, e.g. where reused research came from
             "stage": stage,
             "budget_mode": result.budget.mode,
             "cost_usd": round(float(before.get("cost_usd", 0.0)) + result.cost_usd, 4),

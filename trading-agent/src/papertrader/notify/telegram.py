@@ -133,7 +133,7 @@ def _setup_problem(exc: TelegramError) -> bool:
 
 def flush_outbox(
     sessions: sessionmaker[Session], client: TelegramClient, chat_id: str, cfg: TelegramConfig,
-    *, now: datetime | None = None, limit: int = 30,
+    *, now: datetime | None = None, limit: int = 30, prefix: str = "",
 ) -> FlushReport:  # fmt: skip
     """Send pending messages, oldest first. A temporary problem stops the run (so the
     order is kept); a permanent one marks that message failed and moves on."""
@@ -151,7 +151,7 @@ def flush_outbox(
                 report.dropped += 1
                 continue
             try:
-                ids = client.send(chat_id, row.text)
+                ids = client.send(chat_id, prefix + row.text)
             except TelegramError as exc:
                 if _setup_problem(exc):
                     # Not this message's fault: keep everything queued and stop.

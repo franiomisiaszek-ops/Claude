@@ -154,6 +154,19 @@ def run() -> None:
     run_forever(runtime)
 
 
+@app.command()
+def hub() -> None:
+    """Run the hub: Telegram messages and bot commands for all three systems."""
+    from papertrader.runtime import bootstrap
+    from papertrader.scheduler.service import run_hub
+
+    try:
+        runtime = bootstrap(migrate=True, system="A")
+    except (ConfigError, LiveTradingForbiddenError) as exc:
+        raise _fail(str(exc)) from exc
+    run_hub(runtime)
+
+
 @app.command("dry-run")
 def dry_run(
     date: Annotated[
@@ -920,7 +933,6 @@ def jobs_list() -> None:
     from papertrader.db.models import JobRun
     from papertrader.db.types import utcnow
     from papertrader.ingest.timeutil import NEW_YORK, at_new_york, new_york_date
-    from papertrader.scheduler.jobs import SPECS
 
     jobs = _jobs()
     now = utcnow()
@@ -940,8 +952,9 @@ def jobs_list() -> None:
         runs = session.scalars(select(JobRun).where(JobRun.scheduled_for >= start, JobRun.scheduled_for < end)
                                .order_by(JobRun.id)).all()  # fmt: skip
     latest = {run.job_name: run for run in runs}
+    typer.echo(f"\nSystem {jobs.system}" + ("" if jobs.specs else ": no scheduled jobs yet"))
     typer.echo(f"\n{'job':<18}{'when':<16}{'today':<11}what it does")
-    for spec in SPECS:
+    for spec in jobs.specs:
         if spec.at is None:
             when = f"every {cfg.monitor_interval_minutes} min"
         elif spec.weekly:
@@ -959,11 +972,12 @@ def jobs_run(
     name: Annotated[str, typer.Argument(help="Job name, from `papertrader jobs list`.")],
 ) -> None:
     """Run one job now (also on a weekend or holiday). Recorded like a scheduled run."""
-    from papertrader.scheduler.jobs import BY_NAME
-
-    if name not in BY_NAME:
-        raise _fail(f"unknown job {name}. Jobs: {', '.join(BY_NAME)}")
     jobs = _jobs()
+    names = [spec.name for spec in jobs.specs]
+    if name not in names:
+        raise _fail(
+            f"unknown job {name} for system {jobs.system}. Jobs: {', '.join(names) or 'none'}"
+        )
     start = _latest_notification_id(jobs.runtime)
     outcome = jobs.run(name, manual=True)
     colour = {"succeeded": typer.colors.GREEN, "failed": typer.colors.RED}.get(outcome.status)

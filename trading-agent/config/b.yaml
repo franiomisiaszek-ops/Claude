@@ -1,0 +1,181 @@
+# SYSTEM B - A's research plus a better decision layer (three-way experiment).
+# The agents section must stay identical to A's: B reuses A's agent reports, and refuses
+# to if they differ. Telegram is sent by the hub. Claude budget: $30 a month.
+# Every value is checked at startup; a typo or an out-of-range number stops the
+# program with a readable error. Run `papertrader check` after editing.
+
+universe:
+  index: sp500            # sp500 | sp100 | custom
+  custom_tickers: []      # only used when index is "custom"
+  benchmark: SPY
+
+# Times are New York time, trading days only (weekends, holidays and half days
+# come from the Alpaca market calendar).
+schedule:
+  timezone: America/New_York
+  ingest: "06:30"             # overnight news, filings, macro
+  research_agents: "07:30"
+  score_and_judge: "08:20"    # pattern model + judge
+  morning_brief: "08:45"      # Telegram
+  place_orders: "09:35"       # never earlier than 09:35
+  monitor_interval_minutes: 10
+  reconcile_eod: "16:15"
+  resolve_outcomes: "17:10"   # after A has loaded the day's closing prices
+  weekly_day: sat             # retrain + weekly report
+  weekly_time: "09:00"
+  heartbeat_grace_minutes: 15 # alert if a job is this late
+
+# Claude API spend, enforced in code by the cost governor.
+budget:
+  monthly_usd: 30
+  warn_at: 0.70        # Telegram warning at 70% of the monthly budget
+  degrade_at: 0.85     # fewer agents + lower effort from 85%
+  hard_stop_at: 1.0    # no more API calls this month at 100%
+  daily_overspend_factor: 1.5
+  batch_discount: 0.5  # Message Batches API is billed at 50%
+  # USD per million tokens (Anthropic list prices, checked 2026-11-03).
+  # cache_write is the 5-minute cache price (1.25x input). Update if prices change.
+  prices:
+    claude-opus-5-5:   { input: 4.00, output: 20.00, cache_read: 0.20, cache_write: 5.00 }
+    claude-sonnet-5-5: { input: 2.00, output: 10.00, cache_read: 0.10, cache_write: 2.50 }
+    claude-haiku-5-5:  { input: 0.10, output: 0.50,  cache_read: 0.01, cache_write: 0.125 }
+    # Not used directly. If Claude's safety filter declines a request, the API may answer
+    # with one of these instead, and the cost must still be counted correctly.
+    claude-opus-5:     { input: 5.00, output: 25.00, cache_read: 0.50, cache_write: 6.25 }
+    claude-opus-4-8:   { input: 5.00, output: 25.00, cache_read: 0.50, cache_write: 6.25 }
+
+# Research agents. `defaults` applies to every agent; `overrides` changes one agent.
+# Agent names: macro, earnings, sec_filings, sector_analyst (runs once per GICS
+# sector), news_event, technicals, insider_institutional, contrarian.
+agents:
+  defaults:
+    model: claude-sonnet-5-5
+    effort: medium       # low | medium | high | xhigh | max
+    max_tokens: 16000
+    enabled: true
+  concurrency: 5
+  max_reports_per_agent: 5
+  lookback_hours: 26           # what counts as "fresh" news (three days more on Mondays)
+  max_news_items: 250          # most headlines shown to one agent
+  max_tickers_in_context: 40   # most stocks shown to one agent
+  contrarian_targets: 8        # how many ideas the contrarian tries to disprove
+  overrides: {}
+  # Example:
+  # overrides:
+  #   sector_analyst: { model: claude-haiku-5-5, effort: low }
+  #   contrarian:     { effort: high }
+
+judge:
+  model: claude-opus-5-5
+  effort: high
+  max_tokens: 20000
+  confidence_threshold: 0.65   # only trades at or above this are executed
+  max_trades_per_day: 5
+  # final_confidence = judge x 0.5 + calibrated model probability x 0.3 + agent agreement x 0.2
+  blend: { judge: 0.5, model: 0.3, agreement: 0.2 }
+
+# Risk limits. No leverage and no options, ever - there is no setting for them.
+risk:
+  max_position_pct: 0.10            # at most 10% of equity in one position
+  max_open_positions: 10
+  max_sector_pct: 0.30              # at most 30% of equity in one sector
+  allow_shorts: false
+  daily_loss_kill_switch_pct: 0.03  # pause trading and alert at -3% on the day
+
+trading:
+  order_type: limit          # market | limit (bracket orders either way)
+  limit_slippage_pct: 0.003  # a buy limit is at most 0.3% above the last trade
+  time_in_force: gtc         # keeps stop-loss and take-profit alive overnight
+  live_feed: iex             # real-time prices (the free Alpaca plan allows IEX only)
+  time_stop_minutes_before_close: 15
+  thesis_break_sentiment: -0.3      # fresh news this negative on a held stock triggers a review
+  thesis_review_cooldown_hours: 6   # at most one review per position in this many hours
+  thesis_exit_confidence: 0.6       # the judge must be this sure the thesis is broken to sell
+
+pattern_model:
+  horizons_days: [1, 3, 5, 10]
+  primary_horizon_days: 5
+  walk_forward_splits: 6
+  embargo_days: 10
+  calibration: isotonic      # isotonic | platt
+  transaction_cost_bps: 5
+  slippage_bps: 5
+  backtest_threshold: 0.55   # the backtest buys when the model's probability is at least this
+  backtest_top_n: 3          # at most this many new positions per day in the backtest
+  text_model: claude-haiku-5-5   # reads masked historical headlines (Batches API, half price)
+  text_effort: low
+  text_items_per_request: 40
+
+backfill:
+  years: 5
+
+# Telegram messages and bot commands (keys in .env).
+telegram:
+  enabled: false   # the hub sends every system's messages
+  max_age_hours: 24          # a message stuck longer than this is dropped, not sent late
+  outbox_interval_seconds: 15
+  poll_timeout_seconds: 25   # how long the bot waits for a command per request
+  max_attempts: 5
+  brief_max_trades: 5
+
+# Learning loop: scoring past agent calls, agent weights, weekly lessons.
+learning:
+  resolve_max_age_days: 60       # calls older than this that still cannot be scored are ignored
+  stats_windows_days: [30, 90, 365]
+  # Weight = 1 + scale x (hit rate - 50%) x n / (n + prior_calls), kept between min and max.
+  weight_window_days: 90
+  weight_min_calls: 10           # fewer resolved calls: weight stays 1.0
+  weight_prior_calls: 30
+  weight_scale: 4.0
+  weight_min: 0.25
+  weight_max: 2.0
+  lessons_model: null            # null = the judge's model
+  lessons_effort: medium
+  lessons_max_tokens: 8000
+  lessons_lookback_days: 28
+  lessons_min_outcomes: 10       # fewer resolved calls: no lessons this week
+  lessons_max_age_days: 21       # the judge ignores lessons older than this
+  text_batch_limit: 3000         # new headlines labelled per day (Batches API, half price)
+
+# Data ingestion.
+ingest:
+  alpaca_feed: sip           # sip (all exchanges) | iex (one exchange) | delayed_sip
+  bar_adjustment: all        # prices adjusted for splits and dividends
+  finnhub_news: true         # second news source, only used when FINNHUB_API_KEY is set
+  news_dedupe_window_hours: 72
+  sec_requests_per_second: 8 # the SEC allows at most 10
+  form4_detail_years: 2      # how far back to read each insider filing in detail
+  # Sector funds: prices only, used to compare a stock with its sector.
+  sector_etfs: [XLC, XLY, XLP, XLE, XLF, XLV, XLI, XLK, XLB, XLRE, XLU]
+  # FRED macro series. revised: true keeps the full revision history.
+  fred_series:
+    - { id: DFF }                      # Fed funds rate
+    - { id: DGS2 }                     # 2-year Treasury yield
+    - { id: DGS10 }                    # 10-year Treasury yield
+    - { id: T10Y2Y }                   # yield curve: 10y minus 2y
+    - { id: T10Y3M }                   # yield curve: 10y minus 3m
+    - { id: VIXCLS }                   # VIX
+    - { id: BAMLH0A0HYM2 }             # high-yield credit spread
+    - { id: CPIAUCSL, revised: true }  # CPI
+    - { id: CPILFESL, revised: true }  # core CPI
+    - { id: PCEPILFE, revised: true }  # core PCE
+    - { id: UNRATE, revised: true }    # unemployment rate
+    - { id: PAYEMS, revised: true }    # nonfarm payrolls
+    - { id: ICSA, revised: true }      # weekly jobless claims
+  # Institutions whose quarterly 13F holdings are tracked (SEC identifiers checked 2026-11-13).
+  managers_13f:
+    - { cik: "1067983", name: Berkshire Hathaway }
+    - { cik: "1350694", name: Bridgewater Associates }
+    - { cik: "1167483", name: Tiger Global Management }
+    - { cik: "1336528", name: Pershing Square Capital }
+    - { cik: "1040273", name: Third Point }
+    - { cik: "1061768", name: Baupost Group }
+    - { cik: "1656456", name: Appaloosa }
+    - { cik: "1029160", name: Soros Fund Management }
+    - { cik: "1418814", name: ValueAct }
+    - { cik: "921669",  name: Icahn (Carl C.) }
+    - { cik: "1135730", name: Coatue Management }
+    - { cik: "1103804", name: Viking Global Investors }
+    - { cik: "1061165", name: Lone Pine Capital }
+    - { cik: "1536411", name: Duquesne Family Office }
+    - { cik: "1791786", name: Elliott Investment Management }
