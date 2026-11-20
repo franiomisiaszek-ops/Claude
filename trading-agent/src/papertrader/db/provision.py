@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Connection, Engine, inspect, text
+from sqlalchemy import Connection, Engine, Table, inspect, text
 
 from papertrader.config import ConfigError
 from papertrader.systems import A_SCHEMA, SystemName, schema_name, system_tables
@@ -19,6 +19,19 @@ from papertrader.systems import A_SCHEMA, SystemName, schema_name, system_tables
 
 class SchemaNotReadyError(ConfigError):
     """A system's own tables are missing or different: run `papertrader db provision`."""
+
+
+def extra_tables(system: SystemName) -> list[Table]:
+    """Tables only this system has (outside the shared definitions, see b/models.py)."""
+    if system == "B":
+        from papertrader.b.models import BBase
+
+        return list(BBase.metadata.sorted_tables)
+    return []
+
+
+def own_tables(system: SystemName) -> list[Table]:
+    return [*system_tables(), *extra_tables(system)]
 
 
 def own_schema(engine: Engine, system: SystemName) -> str | None:
@@ -38,21 +51,21 @@ def provision(engine: Engine, system: SystemName) -> list[str]:
     if system == "A":
         raise ValueError("A's tables are created by the Alembic migrations, not here")
     schema = own_schema(engine, system)
-    missing = _missing_tables(engine, schema)
+    missing = _missing_tables(engine, schema, system)
     with engine.begin() as conn:
         if engine.url.get_backend_name() != "sqlite":
             conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
         translated: Connection = conn.execution_options(schema_translate_map={None: schema})
-        tables = [t for t in system_tables() if t.name in missing]
-        from papertrader.db.base import Base
-
-        Base.metadata.create_all(translated, tables=tables, checkfirst=True)
+        tables = [t for t in own_tables(system) if t.name in missing]
+        for metadata in {id(t.metadata): t.metadata for t in tables}.values():
+            metadata.create_all(translated, tables=[t for t in tables if t.metadata is metadata],
+                                checkfirst=True)  # fmt: skip
     return sorted(missing)
 
 
-def _missing_tables(engine: Engine, schema: str | None) -> set[str]:
+def _missing_tables(engine: Engine, schema: str | None, system: SystemName) -> set[str]:
     existing = set(inspect(engine).get_table_names(schema=schema))
-    return {t.name for t in system_tables()} - existing
+    return {t.name for t in own_tables(system)} - existing
 
 
 def verify(engine: Engine, system: SystemName) -> None:
@@ -67,7 +80,7 @@ def verify(engine: Engine, system: SystemName) -> None:
     inspector = inspect(engine)
     existing = set(inspector.get_table_names(schema=schema))
     problems: list[str] = []
-    for table in system_tables():
+    for table in own_tables(system):
         if table.name not in existing:
             problems.append(f"table {table.name} is missing")
             continue
@@ -84,4 +97,5 @@ def verify(engine: Engine, system: SystemName) -> None:
 
 def describe(engine: Engine, system: SystemName) -> dict[str, Any]:
     schema = own_schema(engine, system) if system != "A" else None
-    return {"system": system, "schema": schema, "missing": sorted(_missing_tables(engine, schema))}
+    missing = _missing_tables(engine, schema, system) if system != "A" else set()
+    return {"system": system, "schema": schema, "missing": sorted(missing)}

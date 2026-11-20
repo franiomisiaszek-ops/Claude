@@ -80,6 +80,7 @@ class ScheduleConfig(_Strict):
     ingest: time = time(6, 30)
     research_agents: time = time(7, 30)
     score_and_judge: time = time(8, 20)
+    b_signals: time = time(8, 0)  # system B's extra signals, before its judge
     morning_brief: time = time(8, 45)
     place_orders: time = time(9, 35)
     monitor_interval_minutes: int = Field(default=10, ge=1, le=60)
@@ -357,6 +358,161 @@ class LearningConfig(_Strict):
         return self
 
 
+# --------------------------------------------------------------------------- system B
+
+
+class ConfidenceSwitch(_Strict):
+    """1. Confidence: leave the pattern model out, calibrate, and abstain when unsure."""
+
+    use_pattern_model: bool = True
+    calibrate: bool = False  # isotonic regression on ideas whose outcome is known
+    abstain: bool = False  # conformal prediction: skip trades the data cannot vouch for
+    calibrated_threshold: Fraction = (
+        0.55  # bar for the calibrated probability of beating the market
+    )
+    min_ideas: int = Field(default=60, ge=20)  # resolved ideas needed before calibrating
+    abstain_error_rate: Fraction = 0.2  # conformal alpha: how often the trade set may be wrong
+    window_days: int = Field(default=365, ge=30)
+
+
+class RiskSwitch(_Strict):
+    """2. Sizing by volatility, stops and targets from ATR, and the SPY 200-day filter."""
+
+    vol_sizing: bool = False
+    risk_per_trade_pct: Fraction = 0.01  # share of equity lost if the stop is hit
+    atr_brackets: bool = False
+    atr_stop_multiple: float = Field(default=2.0, gt=0, le=10)
+    atr_target_multiple: float = Field(default=3.0, gt=0, le=20)
+    spy_trend_filter: Literal["off", "halve", "block"] = (
+        "off"  # when SPY is below its 200-day average
+    )
+    trend_days: int = Field(default=200, ge=20)
+
+
+class VetoSwitch(_Strict):
+    """3. A second model reads each trade and may only remove it or make it smaller."""
+
+    enabled: bool = False
+    model: str = "claude-sonnet-5-5"
+    effort: Effort = "medium"
+    max_tokens: int = Field(default=12000, ge=1024, le=MAX_OUTPUT_TOKENS)
+    shrink_to: Fraction = 0.5  # a "shrink" verdict multiplies the size by this
+
+
+class PruningSwitch(_Strict):
+    """4. Leave out agents whose track record, after shrinkage, is worse than a coin flip."""
+
+    enabled: bool = False
+    min_calls: int = Field(default=20, ge=5)
+    prior_calls: int = Field(default=30, ge=0)  # shrinks small samples toward 50%
+    drop_below: Fraction = 0.48  # shrunk hit rate below this: the agent is left out
+
+
+class InsiderSwitch(_Strict):
+    """5. Insider cluster buying from Form 4 (backtest it first: `backtest insiders`)."""
+
+    enabled: bool = False
+    min_buyers: int = Field(default=3, ge=2)
+    window_days: int = Field(default=30, ge=5, le=120)
+    min_usd: float = Field(default=100_000, ge=0)
+    confidence_bonus: float = Field(
+        default=0.0, ge=0, le=0.05
+    )  # added to backed trades, 0 = context only
+
+
+class SectorSwitch(_Strict):
+    """6. Judge stocks against their sector ETF, not only against SPY."""
+
+    enabled: bool = False
+
+
+class CostBandSwitch(_Strict):
+    """7. Skip trades whose expected edge does not clearly beat their costs."""
+
+    enabled: bool = False
+    round_trip_bps: float = Field(default=10.0, ge=0)  # spread + slippage, in and out
+    margin: float = Field(default=2.0, ge=1)  # expected edge must be this many times the costs
+
+
+class OptionsSwitch(_Strict):
+    """8. Options data (MarketData.app, paid): implied volatility, skew, call-put spread."""
+
+    enabled: bool = False
+    max_tickers: int = Field(default=15, ge=1, le=100)
+
+
+class AnalystSwitch(_Strict):
+    """9. Analyst revisions and earnings-call transcripts (FMP, paid)."""
+
+    enabled: bool = False
+    max_tickers: int = Field(default=15, ge=1, le=100)
+    transcripts: bool = False
+
+
+class MetaLabelSwitch(_Strict):
+    """10. Meta-labelling: a small model trained on past ideas decides which to take."""
+
+    enabled: bool = False
+    min_ideas: int = Field(default=150, ge=50)
+    threshold: Fraction = 0.5
+
+
+class FableShadow(_Strict):
+    """The Fable test: some agents also run on Claude Fable, for comparison only."""
+
+    enabled: bool = False
+    model: str = "claude-fable-5-2"
+    compare_with: str = "claude-sonnet-5-5"
+    agents: tuple[str, ...] = ("news_event", "earnings")
+    effort: Effort = "high"
+    max_tokens: int = Field(default=20000, ge=4096, le=MAX_OUTPUT_TOKENS)
+    monthly_usd: float = Field(default=10.0, gt=0)
+
+    @field_validator("agents")
+    @classmethod
+    def _known(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        unknown = sorted(set(value) - KNOWN_AGENTS)
+        if unknown:
+            raise ValueError(f"unknown agent(s) {unknown}; known: {sorted(KNOWN_AGENTS)}")
+        return value
+
+
+class DecisionConfig(_Strict):
+    """System B's decision layer. Everything off is exactly system A's behaviour."""
+
+    confidence: ConfidenceSwitch = ConfidenceSwitch()
+    risk: RiskSwitch = RiskSwitch()
+    veto: VetoSwitch = VetoSwitch()
+    pruning: PruningSwitch = PruningSwitch()
+    insiders: InsiderSwitch = InsiderSwitch()
+    sector_relative: SectorSwitch = SectorSwitch()
+    cost_band: CostBandSwitch = CostBandSwitch()
+    options: OptionsSwitch = OptionsSwitch()
+    analysts: AnalystSwitch = AnalystSwitch()
+    meta_label: MetaLabelSwitch = MetaLabelSwitch()
+    fable_shadow: FableShadow = FableShadow()
+
+    @property
+    def active(self) -> bool:
+        return self != DecisionConfig()
+
+    def switches(self) -> dict[str, bool]:
+        """Which of the ten switches are on (for logs, the brief and the decision log)."""
+        c, r = self.confidence, self.risk
+        return {
+            "1_confidence": (not c.use_pattern_model) or c.calibrate or c.abstain,
+            "2_risk": r.vol_sizing or r.atr_brackets or r.spy_trend_filter != "off",
+            "3_veto": self.veto.enabled,
+            "4_pruning": self.pruning.enabled,
+            "5_insiders": self.insiders.enabled,
+            "6_sector_relative": self.sector_relative.enabled,
+            "7_cost_band": self.cost_band.enabled,
+            "8_options": self.options.enabled,
+            "9_analysts": self.analysts.enabled,
+            "10_meta_label": self.meta_label.enabled,
+        }
+
+
 class AppConfig(_Strict):
     universe: UniverseConfig = UniverseConfig()
     schedule: ScheduleConfig = ScheduleConfig()
@@ -370,9 +526,14 @@ class AppConfig(_Strict):
     ingest: IngestConfig = IngestConfig()
     telegram: TelegramConfig = TelegramConfig()
     learning: LearningConfig = LearningConfig()
+    decision: DecisionConfig = DecisionConfig()  # system B only
 
     def models_in_use(self) -> set[str]:
         models = {self.judge.model, self.pattern_model.text_model}
+        if self.decision.veto.enabled:
+            models.add(self.decision.veto.model)
+        if self.decision.fable_shadow.enabled:
+            models.add(self.decision.fable_shadow.model)
         for name in KNOWN_AGENTS:
             settings = self.agents.for_agent(name)
             if settings.enabled:

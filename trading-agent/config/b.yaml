@@ -16,6 +16,7 @@ schedule:
   ingest: "06:30"             # overnight news, filings, macro
   research_agents: "07:30"
   score_and_judge: "08:25"    # 5 minutes after A: B judges a copy of A's research
+  b_signals: "08:00"          # B's extra signals (insiders, options, analysts)
   morning_brief: "08:45"      # Telegram
   place_orders: "09:35"       # never earlier than 09:35
   monitor_interval_minutes: 10
@@ -39,6 +40,7 @@ budget:
     claude-opus-5-5:   { input: 4.00, output: 20.00, cache_read: 0.20, cache_write: 5.00 }
     claude-sonnet-5-5: { input: 2.00, output: 10.00, cache_read: 0.10, cache_write: 2.50 }
     claude-haiku-5-5:  { input: 0.10, output: 0.50,  cache_read: 0.01, cache_write: 0.125 }
+    claude-fable-5-2:  { input: 8.00, output: 40.00, cache_read: 0.20, cache_write: 10.00 }  # the Fable test
     # Not used directly. If Claude's safety filter declines a request, the API may answer
     # with one of these instead, and the cost must still be counted correctly.
     claude-opus-5:     { input: 5.00, output: 25.00, cache_read: 0.50, cache_write: 6.25 }
@@ -179,3 +181,67 @@ ingest:
     - { cik: "1061165", name: Lone Pine Capital }
     - { cik: "1536411", name: Duquesne Family Office }
     - { cik: "1791786", name: Elliott Investment Management }
+
+# ---------------------------------------------------------------------------- system B
+# B's decision layer (docs/EXPERIMENT.md). Each switch can be turned off on its own;
+# everything off is exactly A's behaviour. Every decision records what A's rules would
+# have done, so each switch is measured against A on the same ideas.
+decision:
+  confidence:                  # 1: honest probabilities instead of raw confidence
+    use_pattern_model: false   # leave the pattern model out of the blend
+    calibrate: true            # isotonic calibration on ideas with a known outcome
+    abstain: true              # conformal: skip trades the data cannot vouch for
+    calibrated_threshold: 0.55 # bar for the calibrated chance of beating the benchmark
+    min_ideas: 60              # until then: raw confidence and A's bar ("waiting")
+    abstain_error_rate: 0.2
+    window_days: 365
+  risk:                        # 2: size and brackets from the stock's real daily range
+    vol_sizing: true
+    risk_per_trade_pct: 0.01   # lose at most 1% of the account if the stop is hit
+    atr_brackets: true
+    atr_stop_multiple: 2.0     # stop 2 average daily ranges away
+    atr_target_multiple: 3.0   # target 3 away
+    spy_trend_filter: halve    # off | halve | block new buys when SPY is below its 200-day average
+    trend_days: 200
+  veto:                        # 3: a second look that may only remove or shrink a trade
+    enabled: true
+    model: claude-sonnet-5-5
+    effort: medium
+    max_tokens: 12000
+    shrink_to: 0.5
+  pruning:                     # 4: stop listening to agents worse than a coin flip
+    enabled: true
+    min_calls: 20
+    prior_calls: 30
+    drop_below: 0.48
+  insiders:                    # 5: OFF until `papertrader --system B backtest insiders` shows an edge
+    enabled: false
+    min_buyers: 3
+    window_days: 30
+    min_usd: 100000
+    confidence_bonus: 0.0      # 0 = shown to the judge only
+  sector_relative:             # 6: measure and show stocks against their sector fund
+    enabled: true
+  cost_band:                   # 7: skip trades whose edge does not clearly beat costs
+    enabled: false
+    round_trip_bps: 10
+    margin: 2.0
+  options:                     # 8: needs MARKETDATA_API_KEY (MarketData.app, about $12/month)
+    enabled: false
+    max_tickers: 15
+  analysts:                    # 9: needs FMP_API_KEY (Financial Modeling Prep, about $49/month)
+    enabled: false
+    max_tickers: 15
+    transcripts: false
+  meta_label:                  # 10: a small model on past ideas; needs 150 resolved ideas
+    enabled: false
+    min_ideas: 150
+    threshold: 0.5
+  fable_shadow:                # the Fable test: never trades, own $10/month cap
+    enabled: false
+    model: claude-fable-5-2
+    compare_with: claude-sonnet-5-5
+    agents: [news_event, earnings]
+    effort: high
+    max_tokens: 20000
+    monthly_usd: 10

@@ -52,8 +52,8 @@ def count(engine: Engine, model: type[m.Base]) -> int:
         return int(conn.execute(select(func.count()).select_from(model)).scalar_one())
 
 
-def b_jobs(b_engine: Engine, fake: FakeClaude, clock: list[Any]) -> Jobs:
-    runtime = Runtime(settings=get_settings(), config=CFG, engine=b_engine,
+def b_jobs(b_engine: Engine, fake: FakeClaude, clock: list[Any], config: Any = CFG) -> Jobs:
+    runtime = Runtime(settings=get_settings(), config=config, engine=b_engine,
                       session_factory=make_session_factory(b_engine), system="B")  # fmt: skip
 
     def anthropic() -> AsyncAnthropic:

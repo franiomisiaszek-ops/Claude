@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import Engine, func, select, text
 
 from papertrader.db import models as m
-from papertrader.db.provision import SchemaNotReadyError, a_tables, provision, verify
+from papertrader.db.provision import SchemaNotReadyError, a_tables, own_tables, provision, verify
 from papertrader.db.session import make_session_factory, make_system_engine
 from papertrader.safety import LiveTradingForbiddenError, assert_distinct_paper_keys
 from papertrader.systems import (
@@ -31,7 +31,7 @@ NOW = datetime(2026, 11, 20, 15, 0, tzinfo=UTC)
 def b_engine(engine: Engine, database_url: str) -> Iterator[Engine]:
     """System B next to an already migrated system A."""
     b = make_system_engine(database_url, "B")
-    assert sorted(provision(b, "B")) == sorted(t.name for t in system_tables())
+    assert sorted(provision(b, "B")) == sorted(t.name for t in own_tables("B"))
     yield b
     b.dispose()
 
@@ -59,6 +59,9 @@ def test_the_split_between_shared_and_own_tables() -> None:
         names.isdisjoint(MARKET_TABLES)
         and {"trades", "orders", "notifications", "api_usage"} <= names
     )
+    only_b = {t.name for t in own_tables("B")} - names
+    assert only_b == {"b_decision_log", "b_signals", "b_calibrations", "b_shadow_reports",
+                      "b_backtests"} and not ({t.name for t in own_tables("C")} - names)  # fmt: skip
     assert check_system("b") == "B"
     with pytest.raises(UnknownSystemError):
         check_system("D")

@@ -373,8 +373,14 @@ class Jobs:
         with self.sessions() as session:
             positions = open_positions(session)
             lessons = latest_lessons(session, self.config, now)
+        layer = None
+        if self.system == "B":
+            from papertrader.b.layer import DecisionLayer
+
+            layer = DecisionLayer(self.config, self.sessions, self.runtime.engine, now)
         result = asyncio.run(run_judge_stage(config=self.config, sessions=self.sessions, claude=claude,
-                                             now=now, positions=positions, lessons=lessons))  # fmt: skip
+                                             now=now, positions=positions, lessons=lessons,
+                                             layer=layer))  # fmt: skip
         trades = result.decision.trades if result.decision else []
         proposed = [t.ticker for t in trades if t.status == "proposed"]
         details = {"cycle_id": result.cycle_id, "trades": len(trades), "to_trade": proposed,

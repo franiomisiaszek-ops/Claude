@@ -17,7 +17,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
-from typing import Literal
+from typing import Literal, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -92,6 +92,33 @@ class CycleResult:
     prices_through: date | None = None
     covered: int = 0
     fresh_from: datetime | None = None  # start of the "fresh news" window, when set by the caller
+
+
+class JudgeLayer(Protocol):
+    """System B's decision layer around the judge (see papertrader.b.layer).
+
+    `prepare` may leave reports out and adds extra context for the judge; `apply` may
+    only re-score, resize, re-bracket or drop the judge's trades, never invent one;
+    `record` writes what it did next to the stored decision.
+    """
+
+    use_pattern_model: bool
+
+    def prepare(
+        self, reports: list[AgentReport], snap: Snapshot, weights: dict[str, float]
+    ) -> tuple[list[AgentReport], dict[str, float], str, list[str]]: ...
+
+    async def apply(
+        self,
+        decision: JudgeDecision,
+        *,
+        reports: Sequence[AgentReport],
+        snap: Snapshot,
+        claude: ClaudeClient,
+        cycle_id: int,
+    ) -> JudgeDecision: ...
+
+    def record(self, session: Session, row: m.JudgeDecision) -> None: ...
 
 
 def _settings(config: AppConfig, name: str, degraded: bool) -> AgentSettings:
@@ -392,6 +419,8 @@ async def _judge(
     positions: Sequence[str],
     lessons: str | None,
     effort: Effort,
+    layer: JudgeLayer | None = None,
+    extra_context: str = "",
 ) -> None:
     assert result.cycle_id is not None
     cycle_id, as_of = result.cycle_id, result.as_of
@@ -410,6 +439,8 @@ async def _judge(
         reports=result.reports, snap=snap, config=config, weights=weights,
         model_scores=scores, positions=positions, lessons=lessons,
     )  # fmt: skip
+    if extra_context:
+        user += "\n\n" + extra_context
     try:
         judged = await claude.structured(
             purpose="judge", model=config.judge.model, effort=effort,
@@ -429,8 +460,14 @@ async def _judge(
     result.runs.append(
         AgentRun("judge", "ok", len(result.decision.trades), cost_usd=judged.cost_usd)
     )
+    if layer is not None:
+        result.decision = await layer.apply(result.decision, reports=result.reports, snap=snap,
+                                            claude=claude, cycle_id=cycle_id)  # fmt: skip
     with sessions() as session:
-        store_decision(session, cycle_id, result.decision, judged.model)
+        row = store_decision(session, cycle_id, result.decision, judged.model)
+        if layer is not None:
+            session.flush()
+            layer.record(session, row)
         session.commit()
 
 
@@ -464,6 +501,7 @@ async def run_judge_stage(
     now: datetime,
     positions: Sequence[str] = (),
     lessons: str | None = None,
+    layer: JudgeLayer | None = None,
 ) -> CycleResult:
     """08:20: pattern-model scores and the judge, on the reports the agents stored at 07:30."""
     budget = claude.governor.status()
@@ -488,8 +526,13 @@ async def run_judge_stage(
         snap: Snapshot = build_snapshot(session, config, as_of, fresh_from=fresh_from)
         weights = agent_weights(session, as_of)
         # Scored at the judge's time, the pattern model's decision time (08:20).
-        scores = score_live(session, config, now, cycle.id)
+        use_model = layer is None or layer.use_pattern_model
+        scores = score_live(session, config, now, cycle.id) if use_model else {}
         session.commit()
+    extra = ""
+    if layer is not None:
+        result.reports, weights, extra, layer_notes = layer.prepare(result.reports, snap, weights)
+        result.notes += layer_notes
     result.prices_through, result.covered = snap.prices_through, len(snap.covered)
     if scores:
         result.notes.append(f"Pattern model scored {len(scores)} stocks.")
@@ -502,7 +545,7 @@ async def run_judge_stage(
     try:
         await _judge(result, config=config, sessions=sessions, claude=claude, snap=snap,
                      weights=weights, scores=scores, positions=positions, lessons=lessons,
-                     effort=effort)  # fmt: skip
+                     effort=effort, layer=layer, extra_context=extra)  # fmt: skip
     except LLMConfigError as exc:
         result.notes.append(str(exc))
         result.cost_usd = claude.governor.cycle_spent
