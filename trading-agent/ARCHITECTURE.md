@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phases 1-8, experiment X1-X4)
+## What exists today (Phases 1-8, experiment X1-X5)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -35,7 +35,7 @@ database, so steps are independent: one can fail and be re-run without redoing t
 | Service | `scheduler/service.py` | APScheduler in New York time: the daily schedule, watchdog, heartbeat, Telegram sender, bot |
 | Jobs | `scheduler/jobs.py` | Every scheduled job, recorded in `job_runs`; alerts on failure; the watchdog |
 | Learning | `learning/` | Scores past agent calls, per-agent accuracy, weights, weekly lessons |
-| Dashboard | `dashboard/` | Read-only Streamlit pages: equity, trades, decisions, leaderboard, model, spend, jobs |
+| Web app | `web/`, `dashboard/data.py` | The iPhone web app (X5): login, read-only pages for A, B and C, three confirmed buttons |
 | Backups | `scripts/`, `backup` service | Nightly database + model backup, restore script |
 | Health check | `healthcheck.py` | Docker marks the app unhealthy if the heartbeat stops |
 | Ingestion | `ingest/` | Loads and refreshes every data source (see below) |
@@ -513,24 +513,14 @@ Known limits:
 ## Dashboard and deployment (Phase 8)
 
 ```
-dashboard/data.py     plain query functions returning pandas frames (tested without Streamlit)
-dashboard/charts.py   Altair charts with a fixed, color-blind-checked palette
-dashboard/app.py      the pages, picked in the sidebar
+dashboard/data.py     plain query functions returning pandas frames (now used by the web app, X5)
 scripts/backup.sh     nightly backup loop (runs in the backup container)
 scripts/restore.sh    restore one backup, all or nothing
 docs/WINDOWS.md       the beginner's guide for running it on the Windows PC
 ```
 
-**Dashboard.** The database connection is opened read-only, so the pages cannot change
-anything. Queries live in `data.py` and return DataFrames with display-ready values
-(percentages already x100), so they are tested directly; every page is also rendered in
-tests through Streamlit's test runner, empty and with data. The cached connection is
-keyed by database URL. Charts: each series keeps the color of its fixed slot (papertrader
-first, SPY second, agents in a fixed order), only the series present appear in legends,
-the palette was run through a color-vision check for light and dark, the theme follows
-Streamlit's, and every chart has a table next to it. The equity curve uses the closing
-snapshot of each day (the latest one for today); SPY is price-only, like the paper account,
-which pays no dividends.
+**Dashboard.** Replaced in X5 by the web app (below); its query functions in `data.py`
+stayed and feed the web app's pages.
 
 **Backups.** A fourth container runs the `postgres:16-alpine` image, so `pg_dump` always
 matches the server. Once a day after 05:00 UTC it writes `papertrader-<stamp>.dump`
@@ -698,6 +688,30 @@ MetaData, schema `sys_c`): prices, weekly plans, orders, daily-trade plans, back
 | Claude | `c/review.py` | Weekly review that may only reduce or skip buys; daily news watch that only alerts |
 | Live | `c/live.py`, jobs `c_data`, `c_plan`, `c_rebalance`, `c_watch`, `c_sleeve`, and the monitor | The weekly plan with the Avanza list, limit orders, emergency stops, the 15% flat rule, the review's effect vs the shadow C |
 | Orders | `trading/broker.py` (`submit_limit`, `submit_stop`) | Plain day limit orders and resting GTC stops |
+
+## The web app (X5)
+
+`web/`: a small Starlette server, rendered on the server with Jinja2 templates; the only
+JavaScript (`static/app.js`) draws the charts at the screen's real width with a crosshair
+and tooltip, reloads live pages and registers the service worker. No outside libraries or
+CDNs, so the content security policy can forbid everything not from the app itself.
+
+| Piece | File | What it does |
+|---|---|---|
+| Server | `web/app.py` | Routes, the page wrapper (login check, read-only views, errors shown without stack traces), security headers, allowed host names, the confirm-then-act flow, the manifest and service worker |
+| Login | `web/auth.py` | scrypt password hash in `<data>/web_auth.json` (mode 600), signed session cookies (HMAC-SHA256, 30 days), CSRF tokens tied to the session, the growing lockout |
+| Pages | `web/data.py` | Per-page queries over each system's read-only connection (A, B, C), reusing `dashboard/data.py` and `experiment/measure.py` |
+| Live numbers | `web/live.py` + the hub's `web_live` job | The hub, which holds the paper keys, stores each account's equity and positions every 2 minutes in market hours (`web.live` in each system's state table); the web app only reads them |
+| Buttons | `web/actions.py` | Pause, resume, skip B's intraday plan: one writable connection per action, a Telegram message, a line in `<data>/web_audit.jsonl` |
+| Look | `web/templates/`, `web/static/` | Phone-first, light and dark from the device, the validated categorical palette (A blue, B orange, C aqua, SPY yellow), a table under every chart |
+
+Security choices: the container gets only `DATABASE_URL` (no `.env`); it listens on
+`127.0.0.1:8501` and Tailscale Serve brings it to the phone with HTTPS; every page needs
+a session; actions need the session, a CSRF token, a same-site Origin and an explicit
+confirmation; host names other than localhost and `*.ts.net` are refused (no DNS
+rebinding); pages use connections opened with `default_transaction_read_only` (SQLite:
+`query_only`). The service worker keeps only the style, script, icons and an offline page,
+never a page with data.
 
 ## Design rules
 

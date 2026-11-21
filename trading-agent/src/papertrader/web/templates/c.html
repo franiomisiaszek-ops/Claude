@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<h1>C · ETF trend portfolio</h1>
+{% if not portfolio %}<p class="muted">System C is not set up yet.</p>{% else %}
+<section class="card">
+  <h2>Account value</h2>
+  {{ ui.chart([('C', equity)], '$', 'C equity', zero=false, empty='No closing values yet.') }}
+</section>
+{% if cplan %}
+<section class="card">
+  <h2>This week's plan</h2>
+  <p>From {{ cplan.signal_day }}'s close · orders {{ cplan.when }} · status {{ cplan.status }} · state {{ cplan.state }}</p>
+  {{ ui.table(cplan.rows, ['fund', 'group', 'action', 'now', 'target', 'why', 'review'], 'No funds.', {'now': 'share', 'target': 'share'}) }}
+  {% if cplan.note %}<p class="muted">Review: {{ cplan.note }}</p>{% endif %}
+  <h3>Copy on Avanza ({{ portfolio.mirror_capital_usd|money(0) }} ≈ {{ '{:,.0f}'.format(portfolio.mirror_capital_usd * portfolio.sek_per_usd) }} SEK)</h3>
+  <ul class="plain">{% for a in cplan.avanza %}<li><div class="row"><span class="grow">{{ a.product }} <small class="muted">({{ a.fund }})</small></span><b>{{ a.usd|money(0) }}</b> <small>≈ {{ '{:,.0f}'.format(a.sek) }} SEK</small></div></li>{% endfor %}</ul>
+  <p class="muted">Buy the whole number of shares closest to each amount. Check every product name on Avanza before buying.</p>
+</section>
+{% else %}<p class="muted">No weekly plan yet: C plans on Friday after the close.</p>{% endif %}
+{% if extras and extras.backtest %}
+<section class="card">
+  <h2>The 20-year backtest ({{ extras.backtest.ran }})</h2>
+  <div class="scroll"><table>
+    <tr><th></th><th>Years</th><th class="n">Per year</th><th class="n">Sharpe</th><th class="n">Worst fall</th></tr>
+    {% for label, period, s in extras.backtest.rows %}<tr><td>{{ label }}</td><td>{{ '2004-2015 (chosen here)' if period == 'in_sample' else '2016 on (never seen)' }}</td>
+      <td class="n">{{ s.get('cagr')|pct if s.get('cagr') is not none else '–' }}</td><td class="n">{{ s.get('sharpe')|num if s.get('sharpe') is not none else '–' }}</td><td class="n">{{ s.get('max_drawdown')|pct if s.get('max_drawdown') is not none else '–' }}</td></tr>{% endfor %}
+  </table></div>
+  <p class="muted">{{ extras.backtest.verdict }}</p>
+</section>
+{% endif %}
+<section class="card">
+  <h2>Daily chart trades</h2>
+  <p>{{ 'On (' ~ portfolio.sleeve.mode ~ ')' if portfolio.sleeve.enabled else 'Off: the 20-year backtest did not support them.' }}
+  {% if extras and extras.sleeve_done %} · {{ extras.sleeve_done }} finished, {{ extras.sleeve_wins }} won, average {{ extras.sleeve_avg|pct(2) }}{% endif %}</p>
+</section>
+{% endif %}
+{% endblock %}

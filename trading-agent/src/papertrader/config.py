@@ -684,6 +684,17 @@ class ExperimentConfig(_Strict):
     weekly_time: time = time(10, 30)
 
 
+class WebConfig(_Strict):
+    """X5. The iPhone web app (papertrader.web), reached privately through Tailscale."""
+
+    session_days: int = Field(default=30, ge=1, le=365)  # stay logged in this long
+    min_password_length: int = Field(default=16, ge=12)
+    # The names the app answers to: this PC, and its Tailscale name (pc-name.tailnet.ts.net).
+    allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1", "*.ts.net"])
+    lockout_after: int = Field(default=5, ge=3)  # wrong passwords before logins are locked
+    lockout_max_minutes: int = Field(default=60, ge=1)  # the lock doubles up to this
+
+
 class AppConfig(_Strict):
     universe: UniverseConfig = UniverseConfig()
     schedule: ScheduleConfig = ScheduleConfig()
@@ -700,6 +711,7 @@ class AppConfig(_Strict):
     decision: DecisionConfig = DecisionConfig()  # system B only
     experiment: ExperimentConfig = ExperimentConfig()  # the hub and the comparison
     portfolio: PortfolioConfig = PortfolioConfig()  # system C only
+    web: WebConfig = WebConfig()  # the web app (X5)
 
     def models_in_use(self) -> set[str]:
         models = {self.judge.model, self.pattern_model.text_model}

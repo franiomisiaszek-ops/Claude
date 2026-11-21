@@ -1,27 +1,22 @@
 from __future__ import annotations
 
-import shutil
 from datetime import time, timedelta
-from pathlib import Path
 
 import pytest
 from sqlalchemy import Engine
 
 from papertrader.dashboard import data
 from papertrader.db import models as m
-from papertrader.db.session import make_engine, make_session_factory
+from papertrader.db.session import make_session_factory
 from papertrader.db.state import HEARTBEAT_KEY, TRADING_PAUSED_KEY, set_state
 from papertrader.db.types import utcnow
 from papertrader.ingest.timeutil import at_new_york
 from papertrader.notify.outbox import queue
-from papertrader.runtime import bootstrap
 
-from ..conftest import PROJECT_ROOT
 from ..ingest.helpers import shipped_config
 from ..trading.helpers import MONDAY, idea, seed_decision
 
 CFG = shipped_config()
-APP = str(PROJECT_ROOT / "src/papertrader/dashboard/app.py")
 
 
 def seed(engine: Engine) -> None:
@@ -140,39 +135,3 @@ def test_empty_database_gives_empty_frames(engine: Engine) -> None:
     assert data.decision_choices(engine) == [] and data.leaderboard(engine, 90).as_of is None
     assert data.model_versions(engine).empty and data.api_spend(engine).daily.empty
     assert data.weights(engine).empty and data.latest_lesson(engine) is None
-
-
-@pytest.fixture
-def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    shutil.copy(PROJECT_ROOT / "config.yaml", tmp_path / "config.yaml")
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'app.db'}")
-    return tmp_path
-
-
-@pytest.mark.parametrize("filled", [True, False])
-def test_every_page_renders(project: Path, filled: bool) -> None:
-    from streamlit.testing.v1 import AppTest
-
-    bootstrap(migrate=True).engine.dispose()
-    if filled:
-        engine = make_engine(f"sqlite:///{project / 'app.db'}")
-        seed(engine)
-        engine.dispose()
-    page = AppTest.from_file(APP).run(timeout=30)
-    assert not page.exception, page.exception
-    pages = page.sidebar.radio[0].options
-    assert len(pages) == 10
-    for name in pages:
-        page.sidebar.radio[0].set_value(name).run(timeout=30)
-        assert not page.exception, (name, page.exception)
-        assert not page.error, (name, [e.value for e in page.error])
-    page.sidebar.radio[0].set_value("Overview").run(timeout=30)
-    if filled:
-        assert any(w.value.startswith("Trading is paused: testing") for w in page.warning)
-        page.sidebar.radio[0].set_value("Decisions and reports").run(timeout=30)
-        assert any("AAPL · LONG · earnings" in e.label for e in page.expander)
-    else:
-        page.sidebar.radio[0].set_value("Equity vs SPY").run(timeout=30)
-        assert any("No equity snapshots yet" in i.value for i in page.info)
-    page.sidebar.radio[0].set_value("Experiment: A vs B vs C").run(timeout=30)
-    assert any("has not started yet" in str(md.value) for md in page.markdown)

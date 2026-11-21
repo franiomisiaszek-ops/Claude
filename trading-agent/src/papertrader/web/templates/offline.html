@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Offline · papertrader{% endblock %}
+{% block content %}
+<div class="login card">
+  <h1>Can't reach your PC</h1>
+  <p>Check that:</p>
+  <ul class="bullets">
+    <li>Tailscale is switched on on this phone,</li>
+    <li>the PC is on and Docker Desktop is running.</li>
+  </ul>
+  <p><a class="btn primary" href="/">Try again</a></p>
+</div>
+{% endblock %}

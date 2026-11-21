@@ -14,7 +14,6 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "apscheduler>=3.10,<4",
     "typer>=0.15",
-    "streamlit>=1.40",
     "tzdata>=2024.1",
     "alpaca-py>=0.45.0",
     "defusedxml>=0.7.1",
@@ -25,6 +24,10 @@ dependencies = [
     "pandas>=3.1.1",
     "numpy>=2.5.4",
     "joblib>=1.6.0",
+    "starlette>=0.47",
+    "uvicorn>=0.35",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.20",
 ]
 
 [project.scripts]

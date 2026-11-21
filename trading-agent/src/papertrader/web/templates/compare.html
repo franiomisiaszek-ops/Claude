@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<h1>A vs B vs C</h1>
+{% if cmp %}
+<div class="card">
+  {% for line in cmp.verdict %}<p>{{ line }}</p>{% endfor %}
+  {% if cmp.start %}<p class="muted">Started {{ cmp.start.strftime('%a %d %b %Y') }} · {{ cmp.days }} trading days · phase: {{ cmp.phase }}. Measured as written in advance (docs/PREREGISTRATION.md).</p>{% endif %}
+</div>
+{% if cmp.start %}
+<h2>Return since the start, after costs</h2>
+{{ ui.chart(cmp.returns.items()|list, '%', 'Return since the start after costs', empty='No closing equity since the start yet.') }}
+<h2>Return vs SPY</h2>
+{{ ui.chart(cmp.vs_spy.items()|list, '%', 'Return minus SPY', empty='No days to compare yet.') }}
+<h2>Drawdown (fall from the peak)</h2>
+{{ ui.chart(cmp.drawdown.items()|list, '%', 'Drawdown', empty='No days yet.') }}
+<h2>The numbers</h2>
+{{ ui.table(cmp.rows, ['system', 'days', 'net', 'vs_spy', 'gross', 'worst_fall', 'sharpe', 'hit_rate', 'ic', 'brier', 'trades', 'traded_usd', 'spread_cost_usd', 'claude_usd', 'data_usd', 'net_at_capital'], 'No system has data yet.',
+   {'net': 'pct', 'vs_spy': 'pct', 'gross': 'pct', 'worst_fall': 'pct', 'sharpe': 'num', 'hit_rate': 'pct', 'ic': 'num', 'brier': 'num', 'trades': 'num', 'traded_usd': 'money', 'spread_cost_usd': 'money', 'claude_usd': 'money', 'data_usd': 'money', 'net_at_capital': 'signed', 'days': 'num'}) }}
+<details><summary>What the columns mean</summary>
+<dl class="kv">
+  <dt>net</dt><dd>return after Claude and data costs</dd>
+  <dt>vs_spy</dt><dd>net return minus SPY's over the same days</dd>
+  <dt>gross</dt><dd>return before costs</dd>
+  <dt>worst_fall</dt><dd>the deepest fall from a peak</dd>
+  <dt>sharpe</dt><dd>return per unit of risk, per year (needs 10+ days)</dd>
+  <dt>hit_rate, ic, brier</dt><dd>how good the ideas were at 5 days, against their sector (A and B)</dd>
+  <dt>trades, traded_usd</dt><dd>trades (C: orders) and dollars bought and sold since the start</dd>
+  <dt>spread_cost_usd</dt><dd>an estimate of the hidden cost of buying and selling (0.05% of dollars traded); already inside the returns</dd>
+  <dt>net_at_capital</dt><dd>net profit in dollars had the same returns been made on {{ cmp.real_capital|money(0) }}, after the Claude and data bills</dd>
+</dl>
+</details>
+{% if cmp.tests %}
+<h2>The pre-registered tests</h2>
+<ul class="plain">{% for t in cmp.tests %}<li><b>{{ t.name }}</b> {{ t.question }}<br>
+  {% if t.mean is not none %}<small>mean {{ '%+.4f'|format(t.mean) }} over {{ t.days }} days{% if t.interval %}; 95% interval {{ '%+.4f'|format(t.interval[0]) }} to {{ '%+.4f'|format(t.interval[1]) }}{% else %}; too few days for an interval{% endif %}{% if t.p is not none %}; p {{ '%.2f'|format(t.p) }} after Holm{% endif %}</small>{% else %}<small>not enough data yet</small>{% endif %}
+</li>{% endfor %}</ul>
+{% endif %}
+{% endif %}
+<h2>Each system since its first day, and SPY</h2>
+<p class="muted">From each system's first recorded day (paper money, before Claude costs), including days before the official start.</p>
+{{ ui.chart(first.items()|list, '%', 'Change since the first day', empty='No closing values yet.') }}
+{% endif %}
+{% endblock %}

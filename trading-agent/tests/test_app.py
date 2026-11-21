@@ -126,17 +126,6 @@ def test_dashboard_status_before_and_after_migration(tmp_path: Path, engine: Eng
     assert stale.table_rows["system_state"] == 1
 
 
-def test_dashboard_page_renders_without_errors(project: Path) -> None:
-    from streamlit.testing.v1 import AppTest
-
-    bootstrap(migrate=True).engine.dispose()
-    page = AppTest.from_file(str(PROJECT_ROOT / "src/papertrader/dashboard/app.py")).run(timeout=30)
-    assert not page.exception
-    assert not page.error
-    assert page.title[0].value == "papertrader"
-    assert "PAPER TRADING ONLY" in page.caption[0].value
-
-
 def test_healthcheck_follows_the_heartbeat(project: Path) -> None:
     from papertrader.healthcheck import main
 

@@ -57,14 +57,21 @@ def config_path(name: SystemName, fallback: Path, folder: Path = Path("config"))
 
 
 def open_views(
-    settings: Settings, folder: Path = Path("config"), skip: Collection[str] = ()
+    settings: Settings,
+    folder: Path = Path("config"),
+    skip: Collection[str] = (),
+    *,
+    read_only: bool = False,
 ) -> dict[SystemName, SystemView]:
-    """All systems whose tables exist. B and C are left out until they are provisioned."""
+    """All systems whose tables exist. B and C are left out until they are provisioned.
+
+    `read_only=True` (the web app's pages): the database refuses every write.
+    """
     views: dict[SystemName, SystemView] = {}
     for name in SYSTEMS:
         if name in skip:
             continue
-        engine = make_system_engine(settings.database_url, name)
+        engine = make_system_engine(settings.database_url, name, read_only=read_only)
         try:
             verify(engine, name)
         except SchemaNotReadyError as exc:

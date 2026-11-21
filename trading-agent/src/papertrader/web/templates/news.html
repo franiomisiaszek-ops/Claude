@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>News on held stocks</h1>
+<p class="muted">The latest headlines (last 3 days) for every stock a system holds.</p>
+{% for ticker, systems, lines in news %}
+<section class="card">
+  <h2><span class="ticker">{{ ticker }}</span> <small class="muted">held by {{ systems|join(', ') }}</small></h2>
+  {% if not lines %}<p class="muted">No news in the last 3 days.</p>{% endif %}
+  <ul class="bullets">{% for n in lines %}<li><b>{{ n.headline }}</b>{% if n.summary %}: {{ n.summary }}{% endif %}<br><small>{{ n.when }} · {% if n.url %}<a href="{{ n.url }}" rel="noopener noreferrer" target="_blank">{{ n.source }}</a>{% else %}{{ n.source }}{% endif %}</small></li>{% endfor %}</ul>
+</section>
+{% else %}<p class="muted">No system holds a stock right now.</p>{% endfor %}
+{% endblock %}

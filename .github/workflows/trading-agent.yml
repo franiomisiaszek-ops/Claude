@@ -75,14 +75,19 @@ jobs:
           docker compose exec -T app papertrader check
           docker compose exec -T app-b papertrader check
           docker compose exec -T app-c papertrader check
+      - name: The web app answers, but shows nothing without a login
+        run: |
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8501/healthz)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8501/)" = 303
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' http://127.0.0.1:8501/healthz)" = 400
       - name: Backup and restore inside the containers
         run: |
           docker compose exec -T backup sh /scripts/backup.sh now
           dump=$(docker compose exec -T backup sh -c 'ls -1 /backups/papertrader-*.dump | tail -n 1' | tr -d '\r')
           echo "restoring $dump"
-          docker compose stop app app-b app-c hub dashboard
+          docker compose stop app app-b app-c hub web
           docker compose exec -T backup sh /scripts/restore.sh "$dump" --yes
-          docker compose start app app-b app-c hub dashboard
+          docker compose start app app-b app-c hub web
           docker compose exec -T app papertrader check
           docker compose exec -T app-b papertrader check
           docker compose exec -T app-c papertrader check

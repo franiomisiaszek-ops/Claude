@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<h1>Jobs and messages</h1>
+{% if not system %}<p class="muted">No system is set up yet.</p>{% else %}
+{{ ui.switcher('/jobs', systems, system, '&monitor=1' if monitor else '') }}
+<section class="card">
+  <div class="row"><div class="grow">{{ ui.sysname(system) }}</div>
+  {% if info.kill_switch %}<span class="badge bad">kill switch</span>{% elif info.paused %}<span class="badge warn">paused</span>{% elif info.running %}<span class="badge ok">running</span>{% else %}<span class="badge bad">not running</span>{% endif %}</div>
+  <small>App {{ info.heartbeat }}{% if info.paused %} · paused: {{ info.paused }}{% endif %}</small>
+</section>
+<h2>Job runs, last 3 days</h2>
+<div class="seg"><a href="/jobs?s={{ system }}" class="{{ '' if monitor else 'on' }}">Without the monitor</a><a href="/jobs?s={{ system }}&amp;monitor=1" class="{{ 'on' if monitor else '' }}">With the monitor</a></div>
+{{ ui.table(info.runs, ['when', 'job', 'result', 'seconds', 'summary'], 'No job runs yet.', {'seconds': 'num'}) }}
+<h2>Telegram messages</h2>
+{{ ui.table(info.messages, ['created', 'kind', 'status', 'sent', 'text', 'problem'], 'No messages yet.') }}
+{% endif %}
+{% endblock %}

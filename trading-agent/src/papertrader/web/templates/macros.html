@@ -1,0 +1,41 @@
+{% macro sysname(name) %}<span class="sys"><span class="dot s{{ SLOTS.get(name, 0) }}"></span>{{ TITLES.get(name, name) }}</span>{% endmacro %}
+
+{% macro switcher(base, systems, current, extra='') %}
+{% if systems|length > 1 %}<div class="seg" role="tablist">{% for s in systems %}<a href="{{ base }}?s={{ s }}{{ extra }}" class="{{ 'on' if s == current else '' }}">{{ s }}</a>{% endfor %}</div>{% endif %}
+{% endmacro %}
+
+{# A line chart. series: list of (name, points) with points [(iso day, value)]. #}
+{% macro chart(series, unit='%', title='', zero=true, area=false, empty='No data yet.', height=210) %}
+{% set payload = {'series': [], 'unit': unit, 'title': title, 'zero': zero, 'area': area, 'empty': empty, 'height': height} %}
+{% for name, points in series %}{% set _ = payload.series.append({'name': name, 'slot': SLOTS.get(name, loop.index0 % 4), 'points': points}) %}{% endfor %}
+<figure class="chart" data-chart="{{ payload|tojson|forceescape }}">
+  {% if series|length > 1 %}<div class="legend">{% for name, points in series %}<span><i class="dot s{{ SLOTS.get(name, loop.index0 % 4) }}"></i>{{ name }}</span>{% endfor %}</div>{% endif %}
+  <div class="plot"></div>
+  <div class="tip" hidden></div>
+  <details><summary>Table</summary>
+    <div class="scroll"><table>
+      <tr><th>Day</th>{% for name, points in series %}<th class="n">{{ name }}</th>{% endfor %}</tr>
+      {% set days = [] %}{% for name, points in series %}{% for p in points %}{% if p[0] not in days %}{% set _ = days.append(p[0]) %}{% endif %}{% endfor %}{% endfor %}
+      {% for dday in days|sort(reverse=true) %}<tr><td>{{ dday }}</td>{% for name, points in series %}<td class="n">{% for p in points %}{% if p[0] == dday %}{{ '%+.2f%%'|format(p[1]) if unit == '%' else p[1]|money }}{% endif %}{% endfor %}</td>{% endfor %}</tr>{% endfor %}
+    </table></div>
+  </details>
+</figure>
+{% endmacro %}
+
+{# A table from a list of dicts. fmt: column -> money | signed | pct | pct100 | share | num | text #}
+{% macro table(rows, columns, empty='Nothing yet.', fmt={}) %}
+{% if not rows %}<p class="muted">{{ empty }}</p>{% else %}
+<div class="scroll"><table>
+<tr>{% for c in columns %}<th class="{{ 'n' if fmt.get(c) in ('money', 'signed', 'pct', 'pct100', 'num', 'share') else '' }}">{{ c }}</th>{% endfor %}</tr>
+{% for r in rows %}<tr>{% for c in columns %}{% set v = r.get(c) %}{% set f = fmt.get(c, 'text') %}
+{% if f == 'money' %}<td class="n">{{ v|money if v is not none and v == v else '–' }}</td>
+{% elif f == 'signed' %}<td class="n {{ v|cls if v == v else '' }}">{{ v|signed_money if v is not none and v == v else '–' }}</td>
+{% elif f == 'pct' %}<td class="n {{ v|cls if v == v else '' }}">{{ v|pct if v is not none and v == v else '–' }}</td>
+{% elif f == 'pct100' %}<td class="n {{ v|cls if v == v else '' }}">{{ '%+.2f%%'|format(v) if v is not none and v == v else '–' }}</td>
+{% elif f == 'share' %}<td class="n">{{ v|pct(0, false) if v is not none and v == v else '–' }}</td>
+{% elif f == 'num' %}<td class="n">{{ v|num if v is not none and v == v else '–' }}</td>
+{% else %}<td class="{{ 'wrap' if v is string and v|length > 60 else '' }}">{{ '' if v is none or (v is number and v != v) else v }}</td>{% endif %}
+{% endfor %}</tr>{% endfor %}
+</table></div>
+{% endif %}
+{% endmacro %}

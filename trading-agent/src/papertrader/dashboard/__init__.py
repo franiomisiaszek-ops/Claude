@@ -1,1 +1,1 @@
-"""Read-only Streamlit dashboard. Phase 1 shows system status; the full pages arrive in Phase 8."""
+"""Read-only queries behind the web app's pages (the Streamlit dashboard itself was replaced in X5)."""

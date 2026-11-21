@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<h1>Agents</h1>
+{% if not system %}<p class="muted">No system with research is set up yet.</p>{% else %}
+{{ ui.switcher('/agents', systems, system, '&w=' ~ window) }}
+<div class="seg"><a href="/agents?s={{ system }}&amp;w=30" class="{{ 'on' if window == 30 else '' }}">30 days</a><a href="/agents?s={{ system }}&amp;w=90" class="{{ 'on' if window == 90 else '' }}">90 days</a></div>
+{% if not board.as_of %}<p class="muted">No scores yet: an agent is scored once its predictions' time is up.</p>{% else %}
+<p class="muted">Scored up to {{ board.as_of.strftime('%d %b %Y') }}. Hit rate: how often the stock beat SPY in the predicted direction. Brier: lower is better (0.25 = a coin flip).</p>
+<section class="card"><h2>Overall</h2>{{ ui.table(board.overall.to_dict('records'), ['agent', 'calls', 'hit rate %', 'Brier', 'avg vs SPY %'], 'No scores.', {'calls': 'num', 'hit rate %': 'num', 'Brier': 'num', 'avg vs SPY %': 'pct100'}) }}</section>
+<details class="card"><summary>By sector</summary>{{ ui.table(board.by_sector.to_dict('records'), ['agent', 'sector', 'calls', 'hit rate %', 'Brier', 'avg vs SPY %'], 'No scores.', {'calls': 'num', 'hit rate %': 'num', 'Brier': 'num', 'avg vs SPY %': 'pct100'}) }}</details>
+<details class="card"><summary>By event type</summary>{{ ui.table(board.by_event.to_dict('records'), ['agent', 'event_type', 'calls', 'hit rate %', 'Brier', 'avg vs SPY %'], 'No scores.', {'calls': 'num', 'hit rate %': 'num', 'Brier': 'num', 'avg vs SPY %': 'pct100'}) }}</details>
+{% endif %}
+<section class="card"><h2>This week's weights</h2>{{ ui.table(weights, ['agent', 'weight'], 'No weights yet: every agent counts the same.', {'weight': 'num'}) }}</section>
+{% if lesson %}<section class="card"><h2>Latest lessons</h2><p class="muted">{{ lesson[0] }}</p><p class="pre">{{ lesson[1] }}</p></section>{% endif %}
+{% endif %}
+{% endblock %}

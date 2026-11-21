@@ -1,9 +1,9 @@
 #!/bin/sh
 # Put a backup made by backup.sh back. Stop the app first, so nothing writes meanwhile:
 #
-#   docker compose stop app app-b app-c hub dashboard
+#   docker compose stop app app-b app-c hub web
 #   docker compose exec backup sh /scripts/restore.sh /backups/papertrader-2026-11-19_0500.dump
-#   docker compose start app app-b app-c hub dashboard
+#   docker compose start app app-b app-c hub web
 #
 # The whole database is replaced in one transaction: if anything goes wrong, nothing
 # changes. The model files from the same backup are put back too.
@@ -39,4 +39,4 @@ models="$(dirname "$dump")/models-$stamp.tgz"
 if [ -f "$models" ]; then
     mkdir -p "$DATA_DIR" && tar -xzf "$models" -C "$DATA_DIR" && echo "model files restored from $models"
 fi
-echo "Done. Start the apps again: docker compose start app app-b app-c hub dashboard"
+echo "Done. Start the apps again: docker compose start app app-b app-c hub web"

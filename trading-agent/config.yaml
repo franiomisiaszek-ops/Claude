@@ -188,3 +188,11 @@ experiment:
   test_days: 63
   weekly_day: sat           # the weekly comparison on Telegram
   weekly_time: "10:30"
+
+# The iPhone web app (phase X5, docs/WEBAPP.md). Reached only through Tailscale; login required.
+web:
+  session_days: 30          # stay logged in this long on a device
+  min_password_length: 16
+  allowed_hosts: [localhost, 127.0.0.1, "*.ts.net"]
+  lockout_after: 5          # wrong passwords before logins are locked for a while
+  lockout_max_minutes: 60

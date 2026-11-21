@@ -28,15 +28,15 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 | 5 | Trading engine + risk rules | **done** (needs your test on the paper account, see below) |
 | 6 | Telegram messages + bot commands | **done** (needs your test, see below) |
 | 7 | Learning loop + scheduler | **done** (runs by itself once the app is up, see below) |
-| 8 | Dashboard + deployment guide | **done** (see [docs/WINDOWS.md](docs/WINDOWS.md)) |
+| 8 | Dashboard + deployment guide | **done** (the dashboard is now the web app, X5) |
 | 9 | Run on paper for 4-8 weeks | replaced by the three-way experiment |
-| X0-X6 | **Three-way experiment**: A (this system, frozen) vs B (better decisions) vs C (ETF trend portfolio), each on its own paper account | X0-X4 **done**; see [docs/EXPERIMENT.md](docs/EXPERIMENT.md) |
+| X0-X6 | **Three-way experiment**: A (this system, frozen) vs B (better decisions) vs C (ETF trend portfolio), each on its own paper account | X0-X5 **done**; see [docs/EXPERIMENT.md](docs/EXPERIMENT.md) |
 
 Right now the program can load and refresh all its data, run the research agents and the
 judge, trade their decisions on the Alpaca paper account, send everything to you on
 Telegram, and run all of it by itself every trading day while the app is up. It scores
-its own past calls and learns from them each week. A dashboard shows all of it, and a
-backup is made every night.
+its own past calls and learns from them each week. A private iPhone web app shows all of
+it ([docs/WEBAPP.md](docs/WEBAPP.md)), and a backup is made every night.
 
 Now three systems run side by side, each on its own Alpaca paper account, to find out
 which one (if any) makes money after costs: **[docs/EXPERIMENT.md](docs/EXPERIMENT.md)**
@@ -57,7 +57,7 @@ which one (if any) makes money after costs: **[docs/EXPERIMENT.md](docs/EXPERIME
 
 All of these live in [`config.yaml`](config.yaml), with comments. During the experiment each
 system has its own copy in [`config/`](config/); `config.yaml` itself is used by the hub
-(Telegram) and the dashboard.
+(Telegram) and the web app.
 
 ## Start it (Docker, Windows 10)
 
@@ -87,7 +87,8 @@ click the address bar, type `powershell` and press Enter.
    (The `app` service, system A, runs a frozen image you build once first:
    [docs/EXPERIMENT.md](docs/EXPERIMENT.md), step 4.)
 
-4. Open the status page: <http://localhost:8501>
+4. Set the web app's password (`docker compose exec web papertrader web set-password`), then
+   open <http://localhost:8501>. For the iPhone: [docs/WEBAPP.md](docs/WEBAPP.md).
 
 Useful commands:
 
@@ -529,20 +530,18 @@ Headline labels cost a few cents a day, the lessons $0.10-0.30 a week. Whatever 
 the $100 monthly budget is enforced in code: each day may spend about what is left for
 the month divided by the trading days left, and close to the limit fewer agents run.
 
-## Dashboard (Phase 8)
+## The web app (phase X5; it replaced the Phase 8 dashboard)
 
-<http://localhost:8501>, only from this PC. Read-only: nothing on it can change the system.
+A private web app for A, B and C, made for the iPhone ("Add to Home Screen") and fine on
+the PC: <http://localhost:8501> on the PC, and on the iPhone through Tailscale (free, HTTPS,
+nothing opened to the internet). Login required. Read-only, apart from Pause, Resume and
+B's Skip, which each ask you to confirm and are logged.
 
-| Page | What it shows |
-|---|---|
-| Overview | Equity, return since start vs SPY, open trades, win rate, API spend, whether the app is running, paused or stopped by the kill switch, today's jobs |
-| Equity vs SPY | Return since start against SPY, and the drawdown (how far below the best level so far) |
-| Trades | Open and closed trades: prices, P&L, how they ended, which agents were right |
-| Decisions and reports | Any day's decision: market summary, ideas with every part of the confidence, rejected ideas, and every agent report with its evidence and sources |
-| Agent leaderboard | Hit rate, Brier score and return per agent (30/90/365 days), by sector and event type; the weights the judge uses; the latest lessons |
-| Pattern model | Every trained version with its out-of-sample results and why it was or wasn't used |
-| API spend | Spend per day, by purpose and model, against the budget |
-| Jobs and messages | Every scheduled run and every Telegram message |
+Tabs: **Today** (A/B/C side by side, vs SPY, alerts), **Compare** (the experiment's charts
+and numbers), **Trades** (open with live P&L, closed with who was right), **Planned** (what
+is about to be bought or sold, why and when), **More** (C's plan and Avanza list, decisions
+and agent reports with sources, news on held stocks, post-mortems, agents, pattern model,
+costs, jobs and messages, settings). Set-up and security: **[docs/WEBAPP.md](docs/WEBAPP.md)**.
 
 ## Backups (Phase 8)
 
@@ -621,11 +620,12 @@ Tests never touch the network and need no keys.
 config.yaml            behaviour: schedule, risk limits, models, budget (no secrets)
 config/                each experiment system's own settings: a.yaml (frozen), b.yaml, c.yaml
 .env.example           template for your private keys
-docker-compose.yml     db + app (A) + app-b + app-c + hub + dashboard + backup
+docker-compose.yml     db + app (A) + app-b + app-c + hub + web + backup
 docs/WINDOWS.md        running it on your PC: power, backups, updates, troubleshooting
 docs/EXPERIMENT.md     the three-way experiment: set-up, commands, freeze rules
 docs/PREREGISTRATION.md how the systems are judged, written before the data
-scripts/               backup.sh and restore.sh (run inside the backup container)
+docs/WEBAPP.md         the iPhone web app: what it shows, security, Tailscale set-up
+scripts/               backup.sh and restore.sh (run inside the backup container), make_icons.py
 src/papertrader/
   ingest/              data loading: one file per source, plus pipeline.py
   safety.py            the paper-only guard
@@ -640,7 +640,8 @@ src/papertrader/
   cli.py               the `papertrader` command
   db/                  tables, migrations, sessions
   scheduler/           the long-running service: the schedule, jobs, watchdog
-  dashboard/           Streamlit pages (read-only), queries and charts
+  dashboard/           read-only queries behind the web app's pages
+  web/                 the iPhone web app: login, pages, charts, the hub's live numbers
   trading/             broker adapter (paper only), risk rules, engine, thesis checks
   notify/              message outbox, texts, Telegram sender and bot
   learning/            scoring past calls, agent weights, weekly lessons

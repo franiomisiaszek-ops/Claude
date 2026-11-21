@@ -12,7 +12,9 @@
 #              and answers commands (/pnl B). Uses config.yaml.
 #   db         PostgreSQL. Not reachable from outside Docker. A, B and C each have their own
 #              tables in it (schemas public, sys_b, sys_c); the market data is shared.
-#   dashboard  Read-only web page at http://localhost:8501 (this computer only). System A.
+#   web        The iPhone web app (docs/WEBAPP.md): A, B and C, login required. Listens on this
+#              computer only (http://localhost:8501); Tailscale brings it to the iPhone over HTTPS.
+#              Holds no API keys: only the database address.
 #   backup     One database + model backup a day into the "backups" folder
 #              (or BACKUP_DIR from .env, e.g. a OneDrive folder). See docs/WINDOWS.md.
 # All trading is PAPER trading on three separate Alpaca paper accounts.
@@ -50,7 +52,7 @@ x-base: &base
     db:
       condition: service_healthy
 
-# One image for B, C, the hub and the dashboard. Only app-b builds it: when four services
+# One image for B, C, the hub and the web app. Only app-b builds it: when four services
 # built the same image at once, Docker Desktop's builder could drop out ("error reading
 # from server: EOF"). The others reuse the image app-b just built.
 x-app: &app
@@ -118,26 +120,32 @@ services:
     <<: *app
     command: ["papertrader", "hub"]
 
-  dashboard:
-    <<: *app
-    command:
-      - streamlit
-      - run
-      - src/papertrader/dashboard/app.py
-      - --server.address=0.0.0.0
-      - --server.port=8501
-      - --server.headless=true
-      - --browser.gatherUsageStats=false
-      - --client.toolbarMode=minimal
+  web:   # the iPhone web app (X5): login required; no API keys, only the database address
+    image: papertrader:local
+    pull_policy: never   # app-b builds it
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      DATABASE_URL: postgresql+psycopg://papertrader:${POSTGRES_PASSWORD:-change-me}@db:5432/papertrader
+      PAPERTRADER_CONFIG: /app/config.yaml
+      DATA_DIR: /app/data   # the password hash and the activity log live here
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./config:/app/config:ro
+      - appdata:/app/data
+    command: ["papertrader", "web", "serve", "--host", "0.0.0.0", "--port", "8501"]
     ports:
-      - "127.0.0.1:8501:8501"   # only this computer can open the dashboard
+      - "127.0.0.1:8501:8501"   # only this computer; Tailscale serves it to your phone
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)"]
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8501/healthz', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
       start_interval: 3s
+    depends_on:
+      db:
+        condition: service_healthy
 
   backup:
     image: postgres:16-alpine   # the same version as the database, so pg_dump always matches

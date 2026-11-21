@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<h1>Planned</h1>
+<p class="muted">What the systems are about to buy or sell, why, and when. Only system B's intraday trades can be skipped here (A is frozen; Telegram's Skip button for every order comes in the next phase).</p>
+{% for name in ['A', 'B'] %}{% if name in views %}
+<section class="card">
+  <h2>{{ ui.sysname(name) }}</h2>
+  {% set mine = items|selectattr('system', 'equalto', name)|list %}
+  {% if not mine %}<p class="muted">Nothing planned right now. The judge decides at 08:20 New York time; orders go in at 09:35.</p>{% endif %}
+  <ul class="plain">
+  {% for p in mine %}
+    <li>
+      <div class="row"><span class="act {{ p.action|lower }}">{{ p.action }}</span><span class="ticker">{{ p.ticker }}</span><span class="grow muted">{{ p.when }}</span>
+        {% if p.skip_ticker %}<a class="btn small" href="/confirm?a=skip&amp;s=B&amp;t={{ p.skip_ticker }}">Skip</a>{% endif %}</div>
+      <small>{{ p.detail }}</small>
+      {% if p.why %}<p>{{ p.why }}</p>{% endif %}
+      {% if p.against %}<p class="muted">Against: {{ p.against }}</p>{% endif %}
+      {% if p.status and p.status not in ('planned',) %}<small>Status: {{ p.status }}</small>{% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}{% endfor %}
+{% if 'C' in views %}
+<section class="card">
+  <h2>{{ ui.sysname('C') }}</h2>
+  {% if not cplan %}<p class="muted">No weekly plan yet. C plans on Friday after the close and trades on Monday at 09:35.</p>{% else %}
+  <p>Plan from {{ cplan.signal_day }}'s close · orders {{ cplan.when }} · status {{ cplan.status }} · state {{ cplan.state }}</p>
+  {{ ui.table(cplan.rows, ['fund', 'action', 'now', 'target', 'why', 'review'], 'No funds.', {'now': 'share', 'target': 'share'}) }}
+  <p class="muted">Cash {{ (cplan.cash * 100)|round(0)|int }}%. Orders only for funds 20%+ away from their target. <a href="/c">Avanza list and more</a></p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Please confirm</h1>
+{% if action %}
+<section class="card">
+  <p><b>{{ action.describe() }}</b></p>
+  {% if action.warning() %}<p class="banner warn">{{ action.warning() }}</p>{% endif %}
+  <form method="post" action="/action">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="a" value="{{ action.kind }}">
+    <input type="hidden" name="s" value="{{ action.system }}">
+    <input type="hidden" name="t" value="{{ action.ticker }}">
+    <input type="hidden" name="confirm" value="yes">
+    <div class="row"><button class="btn {{ 'danger' if action.kind != 'resume' else 'primary' }}" type="submit">Yes, {{ action.kind }}{{ ' ' ~ action.ticker if action.ticker else ' ' ~ action.system }}</button>
+    <a class="btn" href="{{ back }}">Cancel</a></div>
+  </form>
+  <p class="muted">This is logged and sends you a Telegram message.</p>
+</section>
+{% endif %}
+{% endblock %}

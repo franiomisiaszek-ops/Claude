@@ -36,6 +36,8 @@ experiment_app = typer.Typer(
     no_args_is_help=True, help="The three-way experiment: start it, compare A, B and C."
 )
 app.add_typer(experiment_app, name="experiment")
+web_app = typer.Typer(no_args_is_help=True, help="The iPhone web app: run it, set its password.")
+app.add_typer(web_app, name="web")
 
 
 @app.callback()
@@ -1578,3 +1580,65 @@ def portfolio() -> None:
     if record["trades"]:
         typer.echo(f"Daily chart trades (shadow): {record['trades']} done, {record['wins']} won, "
                    f"average {record['average']:+.2%} after costs")  # fmt: skip
+
+
+# --------------------------------------------------------------------------- the web app (X5)
+
+
+@web_app.command("serve")
+def web_serve(
+    host: Annotated[
+        str, typer.Option(help="Address to listen on (in Docker: 0.0.0.0).")
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="Port.")] = 8501,
+) -> None:
+    """Run the web app. Docker publishes it on this computer only; Tailscale brings it to the iPhone."""
+    import uvicorn
+
+    from papertrader.config import get_settings, load_config
+    from papertrader.logging_setup import configure_logging
+    from papertrader.web.app import create_app
+
+    settings = get_settings()
+    configure_logging(settings.log_level, settings.log_format)
+    try:
+        config = load_config(settings.papertrader_config)
+    except ConfigError as exc:
+        raise _fail(str(exc)) from exc
+    uvicorn.run(create_app(settings, config), host=host, port=port, proxy_headers=False, server_header=False,
+                log_config=None, access_log=False)  # fmt: skip
+
+
+@web_app.command("set-password")
+def web_set_password() -> None:
+    """Set (or change) the web app's password. Logs out every device."""
+    from papertrader.config import get_settings, load_config
+    from papertrader.db.types import utcnow
+    from papertrader.web import auth
+
+    settings = get_settings()
+    minimum = load_config(settings.papertrader_config).web.min_password_length
+    typer.echo(
+        f"Choose a long password: at least {minimum} characters. A few unrelated words work well,"
+    )
+    typer.echo("e.g. four words with spaces. Save it in your iPhone's Passwords app.")
+    first = typer.prompt("New password", hide_input=True)
+    second = typer.prompt("The same again", hide_input=True)
+    if first != second:
+        raise _fail("The two passwords differ; nothing was changed.")
+    try:
+        auth.set_password(auth.auth_path(settings.data_dir), first, minimum, utcnow())
+    except auth.PasswordError as exc:
+        raise _fail(str(exc)) from exc
+    typer.secho("Password set. Every device must log in again.", fg=typer.colors.GREEN)
+
+
+@web_app.command("logout-all")
+def web_logout_all() -> None:
+    """Log out every device (the password stays the same)."""
+    from papertrader.config import get_settings
+    from papertrader.web import auth
+
+    if auth.logout_everywhere(auth.auth_path(get_settings().data_dir)) is None:
+        raise _fail("No password is set yet: run `papertrader web set-password`.")
+    typer.secho("Every device is logged out.", fg=typer.colors.GREEN)

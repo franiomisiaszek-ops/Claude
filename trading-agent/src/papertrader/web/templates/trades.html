@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<h1>Trades</h1>
+{% for s in systems %}
+<section class="card">
+  <h2>{{ ui.sysname(s.name) }}</h2>
+  <p class="muted">{{ s.live_note }}</p>
+  <h3>Open ({{ s.open|length }})</h3>
+  {% if not s.open %}<p class="muted">No open positions.</p>{% else %}
+  <ul class="plain">
+  {% for t in s.open %}
+    <li>
+      <div class="row"><span class="ticker">{{ t.ticker }}</span><span class="act {{ 'buy' if t.side == 'long' else 'short' }}">{{ t.side|upper }}</span>
+        <span class="grow muted">{{ t.qty|num(3) }} shares{% if t.note %} · {{ t.note }}{% endif %}</span>
+        <b class="{{ t.pnl_usd|cls }}">{{ t.pnl_usd|signed_money }}</b> <span class="{{ t.pnl_pct|cls }}">{{ t.pnl_pct|pct(2) }}</span></div>
+      <small>entry {{ t.entry|money }} · now {{ t.price|money }}{% if t.target %} · target {{ t.target|money }}{% endif %}{% if t.stop %} · stop {{ t.stop|money }}{% endif %}{% if t.opened %} · opened {{ t.opened }}{% endif %}{% if t.left %} · time left {{ t.left }}{% endif %}</small>
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+  <details{% if not s.open %} open{% endif %}><summary>{{ 'Recent orders' if s.name == 'C' else 'Closed trades' }} ({{ s.closed|length }})</summary>
+    {% if s.name == 'C' %}
+      {{ ui.table(s.closed, s.closed_columns, 'No filled orders yet.', {'shares': 'num', 'price': 'money'}) }}
+    {% else %}
+      {{ ui.table(s.closed, s.closed_columns, 'No closed trades yet.', {'P&L $': 'signed', 'P&L %': 'pct100', 'vs SPY %': 'pct100', 'days held': 'num'}) }}
+    {% endif %}
+  </details>
+</section>
+{% else %}<p class="muted">No system is set up yet.</p>{% endfor %}
+{% endblock %}

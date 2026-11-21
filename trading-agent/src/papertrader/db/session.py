@@ -28,7 +28,7 @@ def ensure_sqlite_directory(database_url: str) -> None:
 
 
 def make_engine(database_url: str, *, read_only: bool = False) -> Engine:
-    """Create an engine. `read_only=True` makes the database reject all writes (dashboard)."""
+    """Create an engine. `read_only=True` makes the database reject all writes (the web app's pages)."""
     url = make_url(normalise_database_url(database_url))
     kwargs: dict[str, Any] = {"pool_pre_ping": True}
 

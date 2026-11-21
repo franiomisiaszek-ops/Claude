@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<h1>Costs</h1>
+<p class="muted">Claude spending per system against each monthly budget. Data subscriptions: none yet (all free).</p>
+{% for c in costs %}
+<section class="card">
+  <h2>{{ ui.sysname(c.name) }}</h2>
+  <div class="stats">
+    <div class="stat"><div class="label">This month</div><div class="value">{{ c.month|money }} <small>of {{ c.budget|money(0) }}</small></div></div>
+    <div class="stat"><div class="label">Today</div><div class="value">{{ c.today|money }}{% if c.allowance %} <small>of {{ c.allowance|money }}</small>{% endif %}</div></div>
+    <div class="stat"><div class="label">Budget mode</div><div class="value">{{ c.mode }}</div></div>
+  </div>
+  {% if c.mode not in ('normal', 'unknown') %}<p class="banner warn">{{ c.reason }}</p>{% endif %}
+  {% if c.daily %}{{ ui.chart([(c.name, c.daily)], '$', 'Claude dollars per day', zero=true) }}{% endif %}
+  <details><summary>By purpose and model</summary>
+    {{ ui.table(c.by_purpose, ['purpose', 'calls', 'dollars', 'errors'], 'No calls.', {'calls': 'num', 'dollars': 'money', 'errors': 'num'}) }}
+    {{ ui.table(c.by_model, ['model', 'calls', 'dollars'], 'No calls.', {'calls': 'num', 'dollars': 'money'}) }}
+  </details>
+</section>
+{% else %}<p class="muted">No system is set up yet.</p>{% endfor %}
+{% endblock %}

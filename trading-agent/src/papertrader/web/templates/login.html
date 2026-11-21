@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Log in · papertrader{% endblock %}
+{% block content %}
+<div class="login card">
+  <h1>Log in</h1>
+  {% if setup %}
+    <p>No password is set yet. On the PC, in PowerShell, in the trading-agent folder, run:</p>
+    <p><code>docker compose exec web papertrader web set-password</code></p>
+    <p class="muted">Then reload this page.</p>
+  {% else %}
+    {% if error %}<div class="banner bad" role="alert">{{ error }}</div>{% endif %}
+    <form method="post" action="/login">
+      <input type="hidden" name="next" value="{{ next }}">
+      <input type="text" name="username" value="papertrader" autocomplete="username" hidden>
+      <label for="password">Password</label>
+      <input id="password" type="password" name="password" autocomplete="current-password" required autofocus maxlength="256">
+      <p><button class="btn primary" type="submit">Log in</button></p>
+    </form>
+    <p class="muted">Private: reachable only through your Tailscale network. Paper trading only.</p>
+  {% endif %}
+</div>
+{% endblock %}

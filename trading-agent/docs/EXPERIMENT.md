@@ -24,8 +24,8 @@ points at the paper endpoint, and they refuse to start if two systems share a ke
 | X2b | B's intraday scanner (see below; shadow mode first) | done |
 | X2c | B's post-mortems: "why did it move?" and careful lessons (see below) | done |
 | X3 | Measurement: the pre-registered test, the weekly comparison, the comparison page (see below) | done |
-| X4 | System C: the weekly ETF portfolio, its 20-year backtest, the Avanza list (see below) | **done** (the backtest needs your Tiingo key) |
-| X5 | iPhone web app over Tailscale | not started |
+| X4 | System C: the weekly ETF portfolio, its 20-year backtest, the Avanza list (see below) | done (settings set from the backtest) |
+| X5 | iPhone web app over Tailscale ([WEBAPP.md](WEBAPP.md)); replaces the Streamlit dashboard | **done** (needs your set-up) |
 | X6 | Telegram upgrade (warnings before orders, Skip button, no length limit) | not started |
 
 B judges the same research as A, then changes the decision with its switches (next
@@ -240,7 +240,7 @@ Any time:
 docker compose exec hub papertrader experiment report
 ```
 
-The dashboard has a page "Experiment: A vs B vs C" with the same numbers and a chart.
+The web app's Compare tab shows the same numbers with charts ([WEBAPP.md](WEBAPP.md)).
 
 ### The official start (not yet)
 
@@ -448,7 +448,7 @@ docker compose ps
 ```
 
 `app` (system A) and `app-b` should say `healthy` within a minute or two; `hub`, `db`,
-`dashboard` and `backup` should say `Up`. On Telegram, send `/status`: you get an answer
+`web` and `backup` should say `Up`. On Telegram, send `/status`: you get an answer
 from `[A]`, and from `[B]` too within 10 minutes (the hub looks for newly set-up systems
 every 10 minutes).
 
@@ -464,7 +464,7 @@ every 10 minutes).
   `docker compose logs -f hub` (Telegram).
 * One system's command line: `docker compose exec app-b papertrader check`
   (B), `docker compose exec app papertrader check` (A).
-* The dashboard still shows system A. The web app (X5) will show all three.
+* The web app (X5) shows all three systems ([WEBAPP.md](WEBAPP.md)).
 * Backups include all three systems (they are all in the one database).
 
 ## The daily pipeline (New York time)
@@ -497,9 +497,9 @@ you instead of judging reports it would not have got itself.
 So the comparison stays fair, A must not change during the experiment:
 
 * Never rebuild `papertrader:a-frozen`. `docker compose up -d --build` rebuilds only B,
-  C, the hub and the dashboard; A's image is left alone.
+  C, the hub and the web app; A's image is left alone.
 * Never edit `config/a.yaml`. (B's settings are `config/b.yaml`, C's `config/c.yaml`.
-  `config.yaml` is now only used by the hub and the dashboard.)
+  `config.yaml` is now only used by the hub and the web app.)
 * The shared database layout does not change: new tables for B or C go in their own
   sections. Automated tests enforce all three rules.
 * If a bug has to be fixed for everyone (for example a data source changes its format),
@@ -516,6 +516,7 @@ So the comparison stays fair, A must not change during the experiment:
 | 2026-11-20 | The measurement rules pre-registered (docs/PREREGISTRATION.md, phase X3) | all |
 | 2026-11-21 | System C built (phase X4); its settings follow the backtest before the start | C only |
 | 2026-11-21 | C's settings set from its 20-year backtest (6 and 12-month momentum, 8% volatility, best 6 funds, cash in T-bills) | C only |
+| 2026-11-21 | The iPhone web app replaces the dashboard; the hub stores live account numbers for it (phase X5) | none (display only) |
 
 ## How the data is kept apart (for the curious)
 

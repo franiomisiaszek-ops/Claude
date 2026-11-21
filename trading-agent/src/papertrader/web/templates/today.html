@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<h1>Today</h1>
+{% if today %}
+<p class="muted">
+  SPY today <b class="{{ today.spy_day_pct|cls }}">{{ today.spy_day_pct|pct(2) }}</b> ({{ today.spy_note }})
+  {% if today.start %} · since the start ({{ today.start.strftime('%d %b %Y') }}) <b class="{{ today.spy_since_start_pct|cls }}">{{ today.spy_since_start_pct|pct }}</b>{% else %} · the experiment has not started yet{% endif %}
+</p>
+<div class="grid three">
+{% for c in today.cards %}
+  <section class="card">
+    <div class="row"><div class="grow">{{ ui.sysname(c.name) }}</div>
+      {% if c.kill_switch %}<span class="badge bad">kill switch</span>
+      {% elif c.paused %}<span class="badge warn">paused</span>
+      {% elif c.running %}<span class="badge ok">running</span>
+      {% else %}<span class="badge bad">not running</span>{% endif %}
+    </div>
+    <div class="big">{{ c.equity|money(0) }}</div>
+    <small>{{ c.live_note }}</small>
+    <div class="stats">
+      <div class="stat"><div class="label">Today</div><div class="value {{ c.day_pct|cls }}">{{ c.day_pct|pct(2) }}</div></div>
+      <div class="stat"><div class="label">Today vs SPY</div><div class="value {{ (c.day_pct - today.spy_day_pct)|cls if c.day_pct is not none and today.spy_day_pct is not none else '' }}">{{ (c.day_pct - today.spy_day_pct)|pct(2) if c.day_pct is not none and today.spy_day_pct is not none else '–' }}</div></div>
+      <div class="stat"><div class="label">Since the start</div><div class="value {{ c.since_start_pct|cls }}">{{ c.since_start_pct|pct }}</div></div>
+      <div class="stat"><div class="label">vs SPY since the start</div><div class="value {{ (c.since_start_pct - today.spy_since_start_pct)|cls if c.since_start_pct is not none and today.spy_since_start_pct is not none else '' }}">{{ (c.since_start_pct - today.spy_since_start_pct)|pct if c.since_start_pct is not none and today.spy_since_start_pct is not none else '–' }}</div></div>
+      <div class="stat"><div class="label">Open positions</div><div class="value">{{ c.positions }}</div></div>
+      <div class="stat"><div class="label">Claude this month</div><div class="value">{{ c.month_spend|money }} <small>of {{ c.budget|money(0) }}</small></div></div>
+      {% if c.name != 'C' %}
+      <div class="stat"><div class="label">Closed trades</div><div class="value">{{ c.closed }}{% if c.win_rate is not none %} <small>{{ c.win_rate|pct(0, false) }} won</small>{% endif %}</div></div>
+      <div class="stat"><div class="label">Realised P&amp;L</div><div class="value {{ c.realised|cls }}">{{ c.realised|signed_money }}</div></div>
+      {% endif %}
+    </div>
+    {% if c.last_research %}<p><small>Last research {{ c.last_research }} · pattern model: {{ c.model }}</small></p>{% endif %}
+    {% if c.paused %}<p class="banner warn">Paused: {{ c.paused }}</p>{% endif %}
+    <p><small>App {{ c.heartbeat }}</small></p>
+    {% if c.alerts %}
+    <details open><summary>Alerts, last 3 days ({{ c.alerts|length }})</summary>
+      <ul class="plain">{% for when, text in c.alerts %}<li><small>{{ when }}</small><br>{{ text }}</li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+  </section>
+{% else %}
+  <p class="muted">No system is set up yet.</p>
+{% endfor %}
+</div>
+{% endif %}
+{% endblock %}

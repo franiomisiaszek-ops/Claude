@@ -1,4 +1,4 @@
-"""Queries behind the dashboard. Plain functions so they can be tested without Streamlit.
+"""Queries behind the web app's pages (papertrader.web). Plain functions, tested without a browser.
 
 Everything here only reads. Times are shown in New York time, like the schedule.
 Percentages are returned already multiplied by 100 and rounded, ready to display.

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<h1>Settings and buttons</h1>
+<p class="muted">Every button asks you to confirm, is written to the activity log below, and sends you a Telegram message. Settings themselves are changed in the files on the PC.</p>
+{% for name in order %}
+<section class="card">
+  <div class="row"><div class="grow">{{ ui.sysname(name) }}</div>
+  {% set sw = switches[name] %}
+  {% if sw.kill_switch %}<span class="badge bad">kill switch</span>{% elif sw.paused %}<span class="badge warn">paused</span>{% elif sw.running %}<span class="badge ok">running</span>{% else %}<span class="badge bad">not running</span>{% endif %}</div>
+  <p>{% if sw.paused or sw.kill_switch %}<a class="btn primary" href="/confirm?a=resume&amp;s={{ name }}">Resume {{ name }}</a>{% else %}<a class="btn" href="/confirm?a=pause&amp;s={{ name }}">Pause {{ name }}</a>{% endif %}</p>
+  <dl class="kv">{% for k, v in rows[name] %}<dt>{{ k }}</dt><dd>{{ v }}</dd>{% endfor %}</dl>
+  <details><summary>Database tables</summary><dl class="kv">{% for t, n in tables[name] %}<dt>{{ t }}</dt><dd>{{ '{:,}'.format(n) }}</dd>{% endfor %}</dl></details>
+</section>
+{% endfor %}
+<section class="card">
+  <h2>Activity log</h2>
+  {% if not audit %}<p class="muted">Nothing yet.</p>{% endif %}
+  <ul class="plain">{% for e in audit %}<li><small>{{ e.at[:16]|replace('T', ' ') }} UTC</small> · <b>{{ e.event|replace('_', ' ') }}</b>{% if e.action %} {{ e.action }} {{ e.system }} {{ e.ticker }}{% endif %}{% if e.result %}: {{ e.result }}{% endif %}{% if e.failures %} ({{ e.failures }} in a row){% endif %}</li>{% endfor %}</ul>
+</section>
+<section class="card">
+  <h2>This device</h2>
+  <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn" type="submit">Log out</button></form>
+  <p class="muted">To log out every device at once: <code>docker compose exec web papertrader web logout-all</code> on the PC.</p>
+</section>
+{% endblock %}

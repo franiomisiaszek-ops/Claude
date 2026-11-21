@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Post-mortems</h1>
+<p class="muted">System B's "why did it move?" cases: what happened, the likely causes, whether B's decision was good with what was known then, and the lesson. Evidence levels are counted in code, never by the model.</p>
+{% if not has_b %}<p class="muted">System B is not set up yet.</p>{% endif %}
+{% for c in cases %}
+<details class="card">
+  <summary><span class="ticker">{{ c.ticker }}</span> · {{ c.day }} · {{ c.kind }} · <span class="{{ c.move|cls }}">{{ c.move|pct }}</span> · decision {{ c.quality }} · {{ c.evidence }}{% if c.retired %} · retired{% endif %}</summary>
+  <p class="muted">vs SPY {{ c.vs_spy|pct }} · vs sector {{ c.vs_sector|pct }}</p>
+  <p><b>Likely causes:</b></p>
+  <ol>{% for x in c.causes %}<li>{{ x.cause }}{% if x.likelihood is not none %} ({{ (x.likelihood * 100)|round|int }}%){% endif %}{% if x.sources %} <small>[{{ x.sources|join(', ') }}]</small>{% endif %}</li>{% endfor %}</ol>
+  <p><b>What B did:</b> {{ c.what_b_did }}</p>
+  <p><b>With what was known then, the decision was {{ c.quality }}:</b> {{ c.why }}</p>
+  {% if c.change %}<p><b>Would have changed it:</b> {{ c.change }}</p>{% endif %}
+  <p><b>Lesson ({{ c.evidence }}):</b> {{ c.lesson }}</p>
+</details>
+{% else %}{% if has_b %}<p class="muted">No cases yet: they are written each morning at 07:00 New York time about the day before.</p>{% endif %}{% endfor %}
+{% endblock %}

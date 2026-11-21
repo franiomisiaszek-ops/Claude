@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import signal
-import threading
 from datetime import timedelta
 from types import FrameType
 from zoneinfo import ZoneInfo
@@ -152,22 +151,33 @@ HUB_REFRESH_MINUTES = 10
 
 
 def run_hub(runtime: Runtime) -> None:
-    """Telegram for all three systems: send every outbox (tagged) and answer commands."""
+    """Telegram for all three systems: send every outbox (tagged) and answer commands.
+
+    It also stores each paper account's live numbers for the web app every 2 minutes
+    while the market is open (papertrader.web.live), with or without Telegram.
+    """
     from papertrader.hub import HubBot, flush_all, open_views
+    from papertrader.notify.service import make_broker_factory
+    from papertrader.web import live
 
     settings = runtime.settings
     chat = str(settings.telegram_chat_id or "")
-    if settings.telegram_bot_token is None or not chat:
-        log.warning("telegram not configured: the hub has nothing to do. Add TELEGRAM_BOT_TOKEN "
-                    "and TELEGRAM_CHAT_ID to .env, then: docker compose restart hub")  # fmt: skip
-        idle = threading.Event()
-        signal.signal(signal.SIGTERM, lambda *_: idle.set())
-        signal.signal(signal.SIGINT, lambda *_: idle.set())
-        idle.wait()
-        return
+    telegram_on = settings.telegram_bot_token is not None and bool(chat)
+    if not telegram_on:
+        log.warning("telegram not configured: the hub only stores live numbers for the web app. Add "
+                    "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to .env, then: docker compose restart hub")  # fmt: skip
     views = open_views(settings)
-    log.info("hub started", extra={"systems": sorted(views)})
+    log.info("hub started", extra={"systems": sorted(views), "telegram": telegram_on})
     telegram = runtime.config.telegram
+    brokers = {
+        name: make_broker_factory(settings, view.config, name) for name, view in views.items()
+    }
+
+    def snapshot() -> None:
+        try:
+            live.write_all(dict(views), dict(brokers), utcnow())
+        except Exception:  # the web app's numbers must never take the hub down
+            log.exception("live snapshot failed")
 
     def send() -> None:
         client = make_client(settings)
@@ -183,8 +193,10 @@ def run_hub(runtime: Runtime) -> None:
         """Pick up B or C once they have been set up, without a restart."""
         for name, view in open_views(settings, skip=set(views)).items():
             # Replace, never change, the dicts: the sender and the bot may be reading them.
-            bot.bots = {**bot.bots, **HubBot({name: view}, bot.client, chat, settings,
-                                             telegram=telegram).bots}  # fmt: skip
+            if bot is not None:
+                bot.bots = {**bot.bots, **HubBot({name: view}, bot.client, chat, settings,
+                                                 telegram=telegram).bots}  # fmt: skip
+            brokers[name] = make_broker_factory(settings, view.config, name)
             views[name] = view
             log.info("hub now serves another system", extra={"system": name})
 
@@ -201,18 +213,27 @@ def run_hub(runtime: Runtime) -> None:
         finally:
             client.close()
 
-    bot = HubBot(views, make_client(settings), chat, settings, telegram=telegram)
+    bot = (
+        HubBot(views, make_client(settings), chat, settings, telegram=telegram)
+        if telegram_on
+        else None
+    )
+    new_york = ZoneInfo("America/New_York")
     scheduler = BlockingScheduler(timezone=ZoneInfo(runtime.config.schedule.timezone))
-    scheduler.add_job(send, "interval", seconds=telegram.outbox_interval_seconds, id="telegram_outbox",
-                      max_instances=1, coalesce=True)  # fmt: skip
     scheduler.add_job(refresh, "interval", minutes=HUB_REFRESH_MINUTES, id="refresh_systems",
                       max_instances=1, coalesce=True)  # fmt: skip
-    exp = runtime.config.experiment
-    scheduler.add_job(comparison, CronTrigger(day_of_week=exp.weekly_day, hour=exp.weekly_time.hour,
-                                              minute=exp.weekly_time.minute,
-                                              timezone=ZoneInfo(runtime.config.schedule.timezone)),
-                      id="weekly_comparison", max_instances=1, coalesce=True, misfire_grace_time=3600)  # fmt: skip
-    thread = BotThread(bot)  # type: ignore[arg-type]
+    scheduler.add_job(snapshot, CronTrigger(day_of_week="mon-fri", hour="9-16", minute="*/2", timezone=new_york),
+                      id="web_live", max_instances=1, coalesce=True, misfire_grace_time=60)  # fmt: skip
+    scheduler.add_job(snapshot, id="web_live_start", max_instances=1)  # once at start
+    thread = BotThread(bot) if bot is not None else None  # type: ignore[arg-type]
+    if telegram_on:
+        scheduler.add_job(send, "interval", seconds=telegram.outbox_interval_seconds, id="telegram_outbox",
+                          max_instances=1, coalesce=True)  # fmt: skip
+        exp = runtime.config.experiment
+        scheduler.add_job(comparison, CronTrigger(day_of_week=exp.weekly_day, hour=exp.weekly_time.hour,
+                                                  minute=exp.weekly_time.minute,
+                                                  timezone=ZoneInfo(runtime.config.schedule.timezone)),
+                          id="weekly_comparison", max_instances=1, coalesce=True, misfire_grace_time=3600)  # fmt: skip
 
     def _stop(signum: int, _frame: FrameType | None) -> None:
         log.info("hub shutdown requested", extra={"signal": signal.Signals(signum).name})
@@ -220,7 +241,9 @@ def run_hub(runtime: Runtime) -> None:
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    thread.start()
+    if thread is not None:
+        thread.start()
     scheduler.start()
-    thread.stop()
+    if thread is not None:
+        thread.stop()
     log.info("hub stopped")

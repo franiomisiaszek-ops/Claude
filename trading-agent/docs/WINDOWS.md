@@ -23,7 +23,7 @@ Docker Desktop runs four small Linux "containers" on your PC:
 |---|---|
 | `db` | The PostgreSQL database: prices, news, decisions, trades, everything |
 | `app` | The scheduler: the daily jobs, the Telegram bot, PAPER trading on Alpaca |
-| `dashboard` | The read-only web page at <http://localhost:8501> (only this PC can open it) |
+| `web` | The web app at <http://localhost:8501> (login required; on the iPhone through Tailscale, see [WEBAPP.md](WEBAPP.md)) |
 | `backup` | One backup of the database and the models every night |
 
 They restart by themselves if they crash and when Docker Desktop starts. Your data lives
@@ -126,9 +126,10 @@ backups keep the newest 7, and old training datasets are deleted automatically.
 
 You don't need to do anything: Telegram tells you what happens. To look closer:
 
-- **Dashboard**: <http://localhost:8501>. Pages: overview, equity vs SPY, trades,
-  decisions with every agent report, agent leaderboard, pattern model, API spend, jobs
-  and messages. It can't change anything.
+- **Web app**: <http://localhost:8501> on this PC, and on your iPhone through Tailscale
+  ([WEBAPP.md](WEBAPP.md)). A, B and C side by side, the comparison, trades, planned
+  trades, decisions and agent reports (with sources), news, post-mortems, costs, jobs.
+  Read-only apart from Pause / Resume / Skip, which ask you to confirm.
 - **Bot**: `/status`, `/positions`, `/pnl`, `/brief`, `/pause`, `/resume`.
 - **Today's jobs**:
 
@@ -193,10 +194,10 @@ This replaces the whole database with the backup. Anything that happened after t
 backup is lost (the paper account at Alpaca is not affected; the app catches up with it
 on its next check).
 
-1. Stop the app and the dashboard:
+1. Stop the apps and the web app:
 
    ```bash
-   docker compose stop app app-b app-c hub dashboard
+   docker compose stop app app-b app-c hub web
    ```
 
 2. See which backups exist:
@@ -216,7 +217,7 @@ on its next check).
 4. Start again:
 
    ```bash
-   docker compose start app app-b app-c hub dashboard
+   docker compose start app app-b app-c hub web
    ```
 
 **On a new PC:** do the first setup (section 2) with the same `.env`, start once,
@@ -241,7 +242,7 @@ weekend.
 
 3. Rebuild and restart. Database changes, if any, are applied automatically when the
    app starts. (During the three-way experiment this rebuilds B, C, the hub and the
-   dashboard only; system A keeps running its frozen image. See
+   web app only; system A keeps running its frozen image. See
    [EXPERIMENT.md](EXPERIMENT.md).)
 
    ```bash
@@ -291,7 +292,7 @@ backup from step 1 (section 6). Later, to return to the newest version:
 | A job failed | `docker compose run --rm app papertrader jobs history` shows the reason. Most fix themselves the next day; tell me the message if one keeps failing. |
 | "clock is ... seconds ahead/behind" | Restart Docker Desktop (tray icon > Restart), then Windows Settings > Time > Sync now. |
 | "The newest database backup is ... old" | `docker compose logs backup` shows why. `docker compose up -d` restarts it. |
-| Dashboard doesn't open | `docker compose ps`; `docker compose restart dashboard`. Use <http://localhost:8501> on this PC only. |
+| Web app doesn't open | `docker compose ps`; `docker compose restart web`. On the PC: <http://localhost:8501>. On the iPhone: Tailscale must be on ([WEBAPP.md](WEBAPP.md)). |
 | "Docker Desktop is starting" forever | Restart the PC. If it persists: in admin PowerShell, `wsl --update`, then restart. |
 | Disk full | `docker system df` shows Docker's use. `docker image prune` removes old app images safely. Never `docker volume prune`: that deletes your data. |
 | `\r: not found` in the backup logs | The scripts got Windows line endings. Run `Remove-Item scripts\*.sh`, then `git checkout -- scripts`, then `docker compose up -d`. |
@@ -303,8 +304,8 @@ To see everything the app logged recently: `docker compose logs app --since 2h`.
 - **Paper trading only.** The code refuses anything but Alpaca's paper endpoint and
   refuses live keys. There is no setting to change this.
 - **Keys stay in `.env`.** It is never committed to git and never in backups.
-- **The dashboard is only reachable from this PC** (it listens on 127.0.0.1). Don't
-  forward port 8501 on your router.
+- **The web app listens on this PC only** (127.0.0.1); your iPhone reaches it through
+  Tailscale. Don't forward port 8501 on your router, and never use `tailscale funnel`.
 - **The database isn't reachable from outside Docker at all.**
 - **Windows 10** stopped getting free security updates in October 2025, and Docker
   Desktop may stop supporting it in a future release. The system keeps working on the

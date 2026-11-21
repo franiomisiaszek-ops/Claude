@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<h1>Pattern model</h1>
+{% if not system %}<p class="muted">No system with research is set up yet.</p>{% else %}
+{{ ui.switcher('/model', systems, system) }}
+<p class="muted">Every version trained, with its out-of-sample test. A version is only used when it beats the simple alternatives.</p>
+{{ ui.table(rows, ['version', 'trained', 'active', 'hit rate %', 'base rate %', 'daily IC', 'Brier', 'Brier naive', 'AUC', 'backtest %', 'SPY same period %', 'decision'], 'No model trained yet.', {'hit rate %': 'num', 'base rate %': 'num', 'daily IC': 'num', 'Brier': 'num', 'Brier naive': 'num', 'AUC': 'num', 'backtest %': 'pct100', 'SPY same period %': 'pct100'}) }}
+{% endif %}
+{% endblock %}

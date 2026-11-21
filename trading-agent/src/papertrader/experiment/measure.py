@@ -374,7 +374,7 @@ def report_text(c: Comparison, config: AppConfig, *, title: str = "COMPARISON") 
 
 
 def as_rows(c: Comparison) -> list[dict[str, Any]]:
-    """For the dashboard's table."""
+    """Rows for a table of the comparison."""
     rows = []
     for s in c.systems.values():
         rows.append({"System": s.name, "Running": "yes" if s.running else "no", "Days": s.days,
