@@ -364,8 +364,12 @@ def flatten(session: Session, broker: PortfolioBroker, now: datetime, drawdown: 
     for ticker, held in qty.items():
         client_id = f"c-flat-{ticker}-{now:%Y%m%d%H%M}"
         try:
-            whole = int(held) if float(held).is_integer() else held  # fractional shares only with upgrade 5
-            sent = broker.submit_market(symbol=ticker, qty=whole, side="sell", client_order_id=client_id)  # type: ignore[arg-type]
+            whole = (
+                int(held) if float(held).is_integer() else held
+            )  # fractional shares only with upgrade 5
+            sent = broker.submit_market(
+                symbol=ticker, qty=whole, side="sell", client_order_id=client_id
+            )  # type: ignore[arg-type]
         except BrokerError:
             continue
         session.add(Order(kind="flatten", ticker=ticker, side="sell", qty=held, client_order_id=client_id,
