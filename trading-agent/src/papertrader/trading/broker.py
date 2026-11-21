@@ -121,7 +121,7 @@ class Broker(Protocol):
         take_profit: float, stop_loss: float, time_in_force: str,
     ) -> BrokerOrder: ...  # fmt: skip
     def submit_market(
-        self, *, symbol: str, qty: int, side: str, client_order_id: str
+        self, *, symbol: str, qty: float, side: str, client_order_id: str
     ) -> BrokerOrder: ...
     def cancel(self, order_id: str) -> None: ...
     def latest_prices(self, symbols: Sequence[str]) -> dict[str, float]: ...
@@ -285,7 +285,7 @@ class AlpacaPaperBroker:
         )
 
     def submit_market(
-        self, *, symbol: str, qty: int, side: str, client_order_id: str
+        self, *, symbol: str, qty: float, side: str, client_order_id: str
     ) -> BrokerOrder:
         request = MarketOrderRequest(symbol=symbol, qty=qty, side=OrderSide(side), client_order_id=client_order_id,
                                      time_in_force=TimeInForce.DAY)  # fmt: skip

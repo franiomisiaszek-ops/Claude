@@ -369,7 +369,7 @@ def flatten(session: Session, broker: PortfolioBroker, now: datetime, drawdown: 
             )  # fractional shares only with upgrade 5
             sent = broker.submit_market(
                 symbol=ticker, qty=whole, side="sell", client_order_id=client_id
-            )  # type: ignore[arg-type]
+            )
         except BrokerError:
             continue
         session.add(Order(kind="flatten", ticker=ticker, side="sell", qty=held, client_order_id=client_id,
