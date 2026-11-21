@@ -62,7 +62,13 @@ def add_schedule(scheduler: BlockingScheduler, runtime: Runtime, jobs: Jobs) -> 
                                   minute=f"{offset}-59/{every}", timezone=tz)  # fmt: skip
         else:
             at = spec.at(runtime.config)
-            days = cfg.weekly_day if spec.weekly else "mon-fri"
+            days = (
+                spec.weekday(runtime.config)
+                if spec.weekday
+                else cfg.weekly_day
+                if spec.weekly
+                else "mon-fri"
+            )
             trigger = CronTrigger(day_of_week=days, hour=at.hour, minute=at.minute, timezone=tz)
         scheduler.add_job(jobs.run, trigger, args=[spec.name], id=spec.name, max_instances=1,
                           coalesce=True, misfire_grace_time=grace)  # fmt: skip

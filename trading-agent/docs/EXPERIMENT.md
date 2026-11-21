@@ -23,8 +23,8 @@ points at the paper endpoint, and they refuse to start if two systems share a ke
 | X2 | B's better decision layer: ten switches, extra signals, the Fable test (see below) | done |
 | X2b | B's intraday scanner (see below; shadow mode first) | done |
 | X2c | B's post-mortems: "why did it move?" and careful lessons (see below) | done |
-| X3 | Measurement: the pre-registered test, the weekly comparison, the comparison page (see below) | **done** |
-| X4 | System C: 20-year backtest first, then the weekly ETF portfolio (plan below) | not started |
+| X3 | Measurement: the pre-registered test, the weekly comparison, the comparison page (see below) | done |
+| X4 | System C: the weekly ETF portfolio, its 20-year backtest, the Avanza list (see below) | **done** (the backtest needs your Tiingo key) |
 | X5 | iPhone web app over Tailscale | not started |
 | X6 | Telegram upgrade (warnings before orders, Skip button, no length limit) | not started |
 
@@ -262,6 +262,50 @@ together. That day's steps will be:
 
    (with the real date). Then `/resume A` and `/resume B` on Telegram.
 
+## System C day to day (phase X4)
+
+C holds up to 8 funds out of stocks, bonds, gold, commodities and the dollar, chosen by
+fixed rules every week (see "Plan for system C" below for the rules and the backtest).
+
+| When (New York) | What C does |
+|---|---|
+| 08:00 daily | Claude Haiku reads the night's news on C's funds; an alert only if something serious. Never trades |
+| 09:35 Monday | Limit orders for the funds more than 20% off their target weight; anything unfilled is tried again on Tuesday |
+| every 10 minutes | Order status; a resting stop 20% below every holding; 15% below the peak: all out, with an alert (back in after 4 weeks, by the rules); the -3% daily kill switch |
+| 16:30 daily | Its funds' prices with dividends (its own data, from Alpaca) |
+| 16:45 Friday | The signals, Claude Sonnet's review, and the **weekly plan on Telegram** |
+
+The **weekly plan** message lists the target portfolio with the reason for every fund
+("in: momentum +8.2%, 4 of 4 returns positive"), what is sold and why, the orders, the
+review's verdicts, and **how to copy it on Avanza**: for each fund the matching European
+product and the amount for your $1,000 (in dollars and roughly in SEK). Avanza's prices
+are not available to the program, so buy the whole number of shares closest to each
+amount. Check each product name on Avanza before buying: they are well-known funds, but
+the program cannot see Avanza's list.
+
+**Claude's only roles** are the weekly review, which may only reduce or skip a buy (never
+add, never stop a sale), and the daily news watch. The review's effect is measured against
+a "shadow C" that ignores it, shown in every weekly plan.
+
+**The daily chart trades** are built but off: they are switched on only if the backtest
+shows they add profit on the years it never saw, and then run in shadow mode first, with
+"not for copying" on every message.
+
+**Before C trades: the 20-year backtest.**
+
+1. Make a free account at tiingo.com, copy the API token (Account > API) into `.env`:
+   `TIINGO_API_KEY=...`, then `docker compose up -d`.
+2. Run it (it downloads about 22 funds' history first, then takes a few minutes):
+
+   ```bash
+   docker compose exec app-c papertrader backtest c
+   ```
+
+3. Send me a photo of the output. I set `config/c.yaml` from it: the settings chosen on
+   2004-2015, and only the upgrades that helped in both periods.
+
+Any time: `docker compose exec app-c papertrader portfolio` shows the latest plan.
+
 ## Plan for system C (phase X4)
 
 C's rules are set with a 20-year backtest **before** it trades, then frozen.
@@ -417,11 +461,13 @@ every 10 minutes).
 | 08:20 | A's pattern model and judge |
 | 08:25 | B copies A's agent reports, runs its own judge on them, then its switches |
 | 08:45 | Morning briefs, tagged [A] and [B] |
-| 09:35 | Orders (each system on its own account) |
+| 08:00 | C's news watch |
+| 09:35 | Orders (each system on its own account; C on Mondays) |
 | 09:45-15:30 | B's intraday scanner, every 5 minutes (shadow mode at first) |
 | 10:30 | B's Fable test, if switched on (never traded) |
 | every 10 min | Each system watches its own positions |
 | 16:15 | End-of-day reconcile |
+| 16:30 / 16:45 | C's prices; on Fridays C's weekly plan |
 | 17:00 / 17:10 | A, then B, score their past calls |
 | Saturday | Weekly reports; 10:30 the hub's A vs B vs C comparison |
 
@@ -451,6 +497,7 @@ So the comparison stays fair, A must not change during the experiment:
 | 2026-11-20 | B's intraday scanner, in shadow mode (phase X2b) | B only |
 | 2026-11-20 | B's post-mortems and capped lessons (phase X2c) | B only |
 | 2026-11-20 | The measurement rules pre-registered (docs/PREREGISTRATION.md, phase X3) | all |
+| 2026-11-21 | System C built (phase X4); its settings follow the backtest before the start | C only |
 
 ## How the data is kept apart (for the curious)
 

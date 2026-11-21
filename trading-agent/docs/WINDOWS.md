@@ -196,7 +196,7 @@ on its next check).
 1. Stop the app and the dashboard:
 
    ```bash
-   docker compose stop app app-b hub dashboard
+   docker compose stop app app-b app-c hub dashboard
    ```
 
 2. See which backups exist:
@@ -216,7 +216,7 @@ on its next check).
 4. Start again:
 
    ```bash
-   docker compose start app app-b hub dashboard
+   docker compose start app app-b app-c hub dashboard
    ```
 
 **On a new PC:** do the first setup (section 2) with the same `.env`, start once,

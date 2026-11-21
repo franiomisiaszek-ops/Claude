@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phases 1-8, experiment X1-X3)
+## What exists today (Phases 1-8, experiment X1-X4)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -683,6 +683,21 @@ are pre-registered in [docs/PREREGISTRATION.md](docs/PREREGISTRATION.md).
 | Hypotheses and verdict | `measure.hypotheses`, `measure.verdict` | H1-H3 paired by date; the pre-registered decision rule; the $1,000 cost rule |
 | Switch review | `experiment/switches.py` | B's decision log: trades each switch removed or added, scored at 5 days |
 | Reports | `experiment/weekly.py`, the hub's `weekly_comparison` job, `papertrader experiment report`, the dashboard page | One text and one set of numbers everywhere |
+
+## System C (X4)
+
+`c/`: rules first, Claude only to reduce risk. Its own tables (`c/models.py`, own
+MetaData, schema `sys_c`): prices, weekly plans, orders, daily-trade plans, backtest runs.
+
+| Piece | File | What it does |
+|---|---|---|
+| Rules | `c/strategy.py` | Eligibility (most of 1/3/6/12-month returns positive, above the 200-day average, optional dual momentum), momentum ranking, inverse-volatility or risk-parity weights, per-fund and group caps (excess stays in cash), the 10% volatility target (never above 1x), drawdown states, drift-band orders |
+| Data | `c/data.py` | Alpaca daily bars (the live window, refetched daily), Tiingo history and the FRED T-bill rate for the backtest; the T-bill fund's history chained back through BIL and the rate |
+| Backtest | `c/backtest.py` | Friday signals, Monday-open trades, costs, drift band; 12-setting grid chosen on 2004-2015, tested once on 2016+; upgrades and the daily trades recommended only if they help in both periods; SPY and 60/40 |
+| Daily trades | `c/sleeve.py` | Breakout and dip rules in uptrends, ATR stop and target, time limit; used by the backtest and the shadow run |
+| Claude | `c/review.py` | Weekly review that may only reduce or skip buys; daily news watch that only alerts |
+| Live | `c/live.py`, jobs `c_data`, `c_plan`, `c_rebalance`, `c_watch`, `c_sleeve`, and the monitor | The weekly plan with the Avanza list, limit orders, emergency stops, the 15% flat rule, the review's effect vs the shadow C |
+| Orders | `trading/broker.py` (`submit_limit`, `submit_stop`) | Plain day limit orders and resting GTC stops |
 
 ## Design rules
 

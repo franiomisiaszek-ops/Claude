@@ -27,6 +27,10 @@ def extra_tables(system: SystemName) -> list[Table]:
         from papertrader.b.models import BBase
 
         return list(BBase.metadata.sorted_tables)
+    if system == "C":
+        from papertrader.c.models import CBase
+
+        return list(CBase.metadata.sorted_tables)
     return []
 
 

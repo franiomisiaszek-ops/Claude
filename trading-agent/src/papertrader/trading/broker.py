@@ -28,6 +28,7 @@ from alpaca.trading.requests import (
     LimitOrderRequest,
     MarketOrderRequest,
     StopLossRequest,
+    StopOrderRequest,
     TakeProfitRequest,
 )
 
@@ -124,6 +125,16 @@ class Broker(Protocol):
     ) -> BrokerOrder: ...
     def cancel(self, order_id: str) -> None: ...
     def latest_prices(self, symbols: Sequence[str]) -> dict[str, float]: ...
+
+
+class PortfolioBroker(Broker, Protocol):
+    """What system C needs on top: plain limit orders and resting stop orders."""
+
+    def submit_limit(self, *, symbol: str, qty: float, side: str, limit_price: float,
+                     client_order_id: str) -> BrokerOrder: ...  # fmt: skip
+    def submit_stop(
+        self, *, symbol: str, qty: float, stop_price: float, client_order_id: str
+    ) -> BrokerOrder: ...
 
 
 # --------------------------------------------------------------------------- parsing
@@ -286,6 +297,23 @@ class AlpacaPaperBroker:
                 ),
             )
         )
+
+    def submit_limit(self, *, symbol: str, qty: float, side: str, limit_price: float,
+                     client_order_id: str) -> BrokerOrder:  # fmt: skip
+        """A plain limit order for the day (system C's weekly rebalancing)."""
+        request = LimitOrderRequest(symbol=symbol, qty=qty, side=OrderSide(side), client_order_id=client_order_id,
+                                    time_in_force=TimeInForce.DAY, limit_price=round_price(limit_price))  # fmt: skip
+        return parse_order(cast(dict[str, Any], self._call(
+            f"place a limit order for {symbol}", self._client.submit_order, request)))  # fmt: skip
+
+    def submit_stop(
+        self, *, symbol: str, qty: float, stop_price: float, client_order_id: str
+    ) -> BrokerOrder:
+        """A resting sell-stop until cancelled (system C's wide emergency stops)."""
+        request = StopOrderRequest(symbol=symbol, qty=qty, side=OrderSide.SELL, client_order_id=client_order_id,
+                                   time_in_force=TimeInForce.GTC, stop_price=round_price(stop_price))  # fmt: skip
+        return parse_order(cast(dict[str, Any], self._call(
+            f"place a stop order for {symbol}", self._client.submit_order, request)))  # fmt: skip
 
     def cancel(self, order_id: str) -> None:
         self._call("cancel an order", self._client.cancel_order_by_id, order_id)

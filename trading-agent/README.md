@@ -30,7 +30,7 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 | 7 | Learning loop + scheduler | **done** (runs by itself once the app is up, see below) |
 | 8 | Dashboard + deployment guide | **done** (see [docs/WINDOWS.md](docs/WINDOWS.md)) |
 | 9 | Run on paper for 4-8 weeks | replaced by the three-way experiment |
-| X0-X6 | **Three-way experiment**: A (this system, frozen) vs B (better decisions) vs C (ETF trend portfolio), each on its own paper account | X0-X3 **done**; see [docs/EXPERIMENT.md](docs/EXPERIMENT.md) |
+| X0-X6 | **Three-way experiment**: A (this system, frozen) vs B (better decisions) vs C (ETF trend portfolio), each on its own paper account | X0-X4 **done**; see [docs/EXPERIMENT.md](docs/EXPERIMENT.md) |
 
 Right now the program can load and refresh all its data, run the research agents and the
 judge, trade their decisions on the Alpaca paper account, send everything to you on
@@ -573,6 +573,7 @@ by accident. `papertrader check` shows which keys are present (names only, never
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Phase 6 | Telegram's @BotFather |
 | `ALPACA_B_API_KEY`, `ALPACA_B_SECRET_KEY` | Experiment (X1) | A second Alpaca **paper** account, for system B |
 | `ALPACA_C_API_KEY`, `ALPACA_C_SECRET_KEY` | Experiment (X4) | A third Alpaca **paper** account, for system C |
+| `TIINGO_API_KEY` (free) | Experiment (X4) | tiingo.com: price history for system C's 20-year backtest |
 | `MARKETDATA_API_KEY` (optional, paid) | Experiment (X2) | MarketData.app, only if you decide to subscribe (system B, switch 8) |
 | `FMP_API_KEY` (optional, paid) | Experiment (X2) | Financial Modeling Prep, only if you decide to subscribe (system B, switch 9) |
 
@@ -635,6 +636,7 @@ src/papertrader/
   hub.py               one Telegram bot for all systems
   b/                   system B: decision layer, signals, backtest, Fable test, intraday scanner, post-mortems
   experiment/          measuring A vs B vs C vs SPY (pre-registered)
+  c/                   system C: rules, data, backtest, daily trades, review, live trading
   cli.py               the `papertrader` command
   db/                  tables, migrations, sessions
   scheduler/           the long-running service: the schedule, jobs, watchdog

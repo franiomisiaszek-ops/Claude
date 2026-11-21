@@ -7,7 +7,7 @@
 #              built once from the freeze commit (docs/EXPERIMENT.md says how), with
 #              config/a.yaml. Never rebuilt during the experiment. Loads the shared market data.
 #   app-b      System B: A's research plus a better decision layer, with config/b.yaml.
-#   app-c      System C: the weekly ETF trend portfolio. Switched on in phase X4.
+#   app-c      System C: the weekly ETF trend portfolio (gold, bonds, stock funds), with config/c.yaml.
 #   hub        The one Telegram bot for all systems: sends their messages tagged [A] [B] [C]
 #              and answers commands (/pnl B). Uses config.yaml.
 #   db         PostgreSQL. Not reachable from outside Docker. A, B and C each have their own
@@ -103,7 +103,6 @@ services:
 
   app-c:
     <<: *app
-    profiles: ["c"]   # off until phase X4 builds system C
     environment:
       <<: *env
       SYSTEM: "C"

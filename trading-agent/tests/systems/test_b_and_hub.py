@@ -78,7 +78,9 @@ def test_each_system_runs_its_own_jobs() -> None:
     assert "fable_shadow" in [s.name for s in specs_for("B", fable_on)]
     a_jobs = [s.name for s in specs_for("A")]
     assert "ingest" in a_jobs and not {"b_signals", "fable_shadow"} & set(a_jobs)
-    assert specs_for("C") == ()
+    assert "c_plan" in {s.name for s in specs_for("C")} and "judge" not in {
+        s.name for s in specs_for("C")
+    }
 
 
 def test_the_agent_settings_still_match_the_frozen_a() -> None:

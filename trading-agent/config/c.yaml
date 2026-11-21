@@ -1,5 +1,5 @@
-# SYSTEM C - the weekly ETF trend portfolio (three-way experiment). Its strategy
-# settings arrive in Phase X4. Telegram is sent by the hub. Claude budget: $5 a month.
+# SYSTEM C - the weekly ETF trend portfolio (three-way experiment): its rules are in the
+# "portfolio" section at the end. Telegram is sent by the hub. Claude budget: $5 a month.
 # Every value is checked at startup; a typo or an out-of-range number stops the
 # program with a readable error. Run `papertrader check` after editing.
 
@@ -178,3 +178,80 @@ ingest:
     - { cik: "1061165", name: Lone Pine Capital }
     - { cik: "1536411", name: Duquesne Family Office }
     - { cik: "1791786", name: Elliott Investment Management }
+
+# ---------------------------------------------------------------------------- system C
+# The weekly trend-following ETF portfolio (docs/EXPERIMENT.md). Mostly fixed rules;
+# Claude only reviews (and may only reduce) and watches the news.
+# The "avanza" names are the European (UCITS) products to copy each fund with. They are
+# well-known funds, but the program cannot see Avanza's list: check each name there
+# before buying. "" = no close equivalent (leave that part in cash).
+portfolio:
+  funds:
+    - { ticker: SPY,  group: equity,    avanza: "iShares Core S&P 500 UCITS ETF (CSPX)" }
+    - { ticker: QQQ,  group: equity,    avanza: "iShares Nasdaq 100 UCITS ETF (CNDX)" }
+    - { ticker: IWM,  group: equity,    avanza: "SPDR Russell 2000 US Small Cap UCITS ETF (ZPRR)" }
+    - { ticker: EFA,  group: equity,    avanza: "an MSCI World ex USA UCITS ETF (e.g. Xtrackers)" }
+    - { ticker: EEM,  group: equity,    avanza: "iShares Core MSCI EM IMI UCITS ETF (EIMI)" }
+    - { ticker: EWJ,  group: equity,    avanza: "iShares Core MSCI Japan IMI UCITS ETF (SJPA)" }
+    - { ticker: VNQ,  group: equity,    avanza: "iShares US Property Yield UCITS ETF (IUSP)" }
+    - { ticker: SHY,  group: bonds,     avanza: "iShares $ Treasury Bond 1-3yr UCITS ETF (IBTS)" }
+    - { ticker: IEF,  group: bonds,     avanza: "iShares $ Treasury Bond 7-10yr UCITS ETF (IBTM)" }
+    - { ticker: TLT,  group: bonds,     avanza: "iShares $ Treasury Bond 20+yr UCITS ETF (IDTL)" }
+    - { ticker: TIP,  group: bonds,     avanza: "iShares $ TIPS UCITS ETF (ITPS)" }
+    - { ticker: LQD,  group: bonds,     avanza: "iShares $ Corp Bond UCITS ETF (LQDE)" }
+    - { ticker: HYG,  group: bonds,     avanza: "iShares $ High Yield Corp Bond UCITS ETF (IHYU)" }
+    - { ticker: GLD,  group: commodity, avanza: "iShares Physical Gold ETC (SGLN)" }
+    - { ticker: SLV,  group: commodity, avanza: "iShares Physical Silver ETC (SSLN)" }
+    - { ticker: DBC,  group: commodity, avanza: "iShares Diversified Commodity Swap UCITS ETF (ICOM)" }
+    - { ticker: USO,  group: commodity, cap: 0.05, avanza: "WisdomTree WTI Crude Oil ETC (CRUD)" }
+    - { ticker: UUP,  group: currency,  avanza: "" }
+    - { ticker: DBMF, group: managed_futures, avanza: "" }   # only with upgrade 4
+    - { ticker: KMLM, group: managed_futures, avanza: "" }   # only with upgrade 4
+    - { ticker: SGOV, group: cash, cap: 1.0, stand_in: BIL,
+        avanza: "iShares $ Treasury Bond 0-1yr UCITS ETF (IB01), or a SEK money-market fund" }
+  cash_fund: SGOV
+  top_n: 8                     # hold the best 8 eligible funds
+  score_days: [63, 126, 252]   # momentum: average return over 3, 6 and 12 months
+  check_days: [21, 63, 126, 252]
+  min_positive: 3              # eligible when 3 of these 4 returns are positive...
+  trend_days: 200              # ...and the price is above its 200-day average
+  vol_days: 63
+  vol_target: 0.10             # aim for 10% yearly swings; never borrow to get there
+  group_caps: { equity: 0.60, commodity: 0.30, crypto: 0.10, managed_futures: 0.15 }
+  drift_band: 0.20             # trade a fund only when it is 20% off its target weight
+  min_trade_weight: 0.01
+  drawdown_halve: 0.10         # 10% below the peak: half the risk
+  drawdown_flat: 0.15          # 15% below the peak: all out, and an alert
+  flat_weeks: 4
+  emergency_stop_pct: 0.20     # a resting stop 20% below every holding
+  limit_slippage_pct: 0.003
+  cost_bps: 5
+  upgrades:                    # off until the backtest shows they help on the unseen years
+    cash_in_tbills: false
+    dual_momentum: false
+    risk_parity: false
+    managed_futures: false
+    fractional: false
+  veto:
+    enabled: true              # weekly: may only reduce or skip a buy; compared with a shadow C without it
+    model: claude-sonnet-5-5
+    effort: medium
+    watch_enabled: true        # daily: reads the news on C's funds and alerts you; never trades
+    watch_model: claude-haiku-5-5
+  sleeve:                      # the daily chart trades: off until the backtest says yes, then shadow first
+    enabled: false
+    mode: shadow
+    max_share: 0.20
+    per_trade: 0.05
+    breakout_days: 20
+    dip_rsi: 10
+    hold_days: 7
+    stop_atr: 2.0
+    target_atr: 3.0
+  plan_day: fri
+  plan_time: "16:45"
+  data_time: "16:30"
+  rebalance_time: "09:35"
+  watch_time: "08:00"
+  mirror_capital_usd: 1000     # the Avanza amounts are shown for this much
+  sek_per_usd: 10.5            # approximate; update now and then

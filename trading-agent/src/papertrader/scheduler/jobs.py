@@ -62,6 +62,7 @@ class JobSpec:
     every: Callable[[AppConfig], int] | None = (
         None  # minutes between repeats (default: the monitor's)
     )
+    weekday: Callable[[AppConfig], str] | None = None  # runs on this day only (e.g. "fri")
 
 
 SPECS: tuple[JobSpec, ...] = (
@@ -75,6 +76,15 @@ SPECS: tuple[JobSpec, ...] = (
     JobSpec("monitor", "fills, time stops, kill switch, bad news on held stocks", None),
     JobSpec("intraday", "system B's intraday scanner: plans, orders after the /skip window, time stops", None,
             every=lambda c: c.decision.intraday.interval_minutes),
+    JobSpec("c_watch", "system C: Claude reads the news on its funds and alerts (never trades)",
+            lambda c: c.portfolio.watch_time),
+    JobSpec("c_rebalance", "system C: the weekly limit orders (and a retry the next day)",
+            lambda c: c.portfolio.rebalance_time),
+    JobSpec("c_data", "system C: its funds' daily prices", lambda c: c.portfolio.data_time),
+    JobSpec("c_sleeve", "system C: the daily chart trades (shadow first)",
+            lambda c: (datetime.combine(date(2000, 1, 3), c.portfolio.data_time) + timedelta(minutes=8)).time()),
+    JobSpec("c_plan", "system C: signals, the review and the weekly plan", lambda c: c.portfolio.plan_time,
+            weekday=lambda c: c.portfolio.plan_day),
     JobSpec("fable_shadow", "system B's Fable test: some agents again on Claude Fable, never traded", lambda c: c.schedule.b_fable),
     JobSpec("reconcile_eod", "cancel unfilled orders, end-of-day summary", lambda c: c.schedule.reconcile_eod),
     JobSpec("resolve_outcomes", "score agent calls whose horizon has ended", lambda c: c.schedule.resolve_outcomes),
@@ -84,8 +94,9 @@ BY_NAME = {spec.name: spec for spec in SPECS}
 
 # B reuses A's research and does not load market data; C gets its own jobs in Phase X4.
 B_ONLY = ("postmortems", "b_signals", "intraday", "fable_shadow")
+C_ONLY = ("c_watch", "c_rebalance", "c_data", "c_sleeve", "c_plan")
 SYSTEM_JOBS: dict[str, tuple[str, ...]] = {
-    "A": tuple(spec.name for spec in SPECS if spec.name not in B_ONLY),
+    "A": tuple(spec.name for spec in SPECS if spec.name not in B_ONLY + C_ONLY),
     "B": (
         "postmortems",
         "b_signals",
@@ -99,7 +110,7 @@ SYSTEM_JOBS: dict[str, tuple[str, ...]] = {
         "resolve_outcomes",
         "weekly",
     ),
-    "C": (),
+    "C": ("c_watch", "c_rebalance", "monitor", "reconcile_eod", "c_data", "c_sleeve", "c_plan"),
 }
 
 
@@ -111,6 +122,10 @@ def specs_for(system: str, config: AppConfig | None = None) -> tuple[JobSpec, ..
         names.discard("intraday")
     if config is not None and not config.decision.postmortems.enabled:
         names.discard("postmortems")
+    if config is not None and not config.portfolio.veto.watch_enabled:
+        names.discard("c_watch")
+    if config is not None and not config.portfolio.sleeve.enabled:
+        names.discard("c_sleeve")
     return tuple(spec for spec in SPECS if spec.name in names)
 
 
@@ -512,10 +527,15 @@ class Jobs:
                 config=self.config, settings=self.runtime.settings, sessions=self.sessions,
                 engine=engine, claude=self.claude, now=self.now(), refresh_news=self.writes_market_data,
             ))  # fmt: skip
+            portfolio = None
+            if self.system == "C":
+                from papertrader.c.live import watch_risk
+
+                portfolio = watch_risk(self.sessions, self.config, engine.broker, self.now())
         return {"equity": report.equity, "day_change_pct": report.day_change_pct,
                 "opened": report.sync.opened, "closed": report.sync.closed,
                 "time_stops": report.time_stops, "kill_switch": report.kill_switch,
-                "warnings": report.warnings, "notes": notes,
+                "warnings": report.warnings, "notes": notes, "portfolio": portfolio,
                 "summary": f"equity ${report.equity:,.0f} ({report.day_change_pct:+.2%})"}  # fmt: skip
 
     def job_reconcile_eod(self) -> dict[str, Any]:
@@ -599,6 +619,76 @@ class Jobs:
 
         live = self._live()
         return None if live is None else score_plans(self.sessions, self.config, live, self.now())
+
+    # ------------------------------------------------------------------ system C
+
+    def _c(self, body: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        from papertrader.c.live import NotReady
+
+        try:
+            return body()
+        except NotReady as exc:
+            raise JobSkipped(str(exc)) from exc
+
+    def job_c_data(self) -> dict[str, Any]:
+        from papertrader.c.data import refresh_live
+        from papertrader.ingest.alpaca_data import AlpacaSdkData
+
+        key, secret = self.runtime.settings.alpaca_keys(self.system)
+        if not (key and secret):
+            raise JobFailed(
+                "system C's Alpaca paper keys (ALPACA_C_API_KEY, ALPACA_C_SECRET_KEY) are not set"
+            )
+        data = AlpacaSdkData(key.get_secret_value(), secret.get_secret_value(),
+                             feed=self.config.ingest.alpaca_feed, adjustment="all")  # fmt: skip
+        with self.sessions() as session:
+            rows = refresh_live(
+                session, data.bars, self.config.portfolio, new_york_date(self.now())
+            )
+            session.commit()
+        return {"rows": rows, "summary": f"{rows} daily prices stored"}
+
+    def job_c_plan(self) -> dict[str, Any]:
+        from papertrader.c.live import plan_week
+
+        claude = self.claude() if self.config.portfolio.veto.enabled else None
+        return self._c(lambda: asyncio.run(plan_week(self.sessions, self.config, self._engine().broker, claude,
+                                                     self.now())))  # fmt: skip
+
+    def job_c_rebalance(self) -> dict[str, Any]:
+        from papertrader.c.live import rebalance
+
+        with self.trading_lock:
+            return self._c(
+                lambda: rebalance(self.sessions, self.config, self._engine().broker, self.now())
+            )
+
+    def job_c_watch(self) -> dict[str, Any]:
+        from papertrader.c.live import holdings
+        from papertrader.c.review import watch
+
+        broker = self._engine().broker
+        held = sorted(holdings(broker)[0])
+        with self.sessions() as session:
+            result = asyncio.run(
+                watch(session, self._need_claude(), self.config.portfolio.veto, self.now(), held)
+            )
+            if result is not None and result.severity == "high":
+                queue(session, "alert", messages.alert(f"NEWS WATCH (system C): {result.note}"),
+                      dedup_key=f"c-watch:{new_york_date(self.now())}")  # fmt: skip
+                session.commit()
+        if result is None:
+            raise JobSkipped("the news watch did not run")
+        return {
+            "severity": result.severity,
+            "note": result.note,
+            "summary": f"{result.severity}: {result.note}",
+        }
+
+    def job_c_sleeve(self) -> dict[str, Any]:
+        from papertrader.c.live import sleeve_day
+
+        return self._c(lambda: sleeve_day(self.sessions, self.config, self.now()))
 
     def job_postmortems(self) -> dict[str, Any]:
         from papertrader.b.postmortem import run_day
@@ -756,6 +846,8 @@ class Jobs:
         due = []
         for spec in self.specs:
             if spec.at is None:
+                continue
+            if spec.weekday is not None and WEEKDAYS[day.weekday()] != spec.weekday(self.config):
                 continue
             if spec.weekly:
                 if WEEKDAYS[day.weekday()] != self.config.schedule.weekly_day:

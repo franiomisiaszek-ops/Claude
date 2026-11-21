@@ -577,6 +577,100 @@ class DecisionConfig(_Strict):
         }
 
 
+# --------------------------------------------------------------------------- system C
+
+FundGroup = Literal["equity", "bonds", "commodity", "currency", "cash", "managed_futures", "crypto"]
+
+
+class FundSpec(_Strict):
+    """One ETF of system C's universe."""
+
+    ticker: str
+    group: FundGroup
+    cap: Fraction = 0.20  # most of the portfolio this fund may take
+    avanza: str = ""  # the European (UCITS) product to copy it with on Avanza, "" = none
+    stand_in: str | None = None  # older fund used in backtests before this one existed
+
+
+class CUpgrades(_Strict):
+    """The five upgrades, each tested in the backtest before it is switched on."""
+
+    cash_in_tbills: bool = False  # 1: idle money in a T-bill fund instead of cash
+    dual_momentum: bool = False  # 2: a fund must also beat T-bills over 12 months
+    risk_parity: bool = False  # 3: weights from the correlations, not only each fund's volatility
+    managed_futures: bool = False  # 4: DBMF / KMLM in the universe
+    fractional: bool = False  # 5: fractional shares (for small accounts)
+
+
+class CVeto(_Strict):
+    """Claude's only roles in C: a weekly risk-reducing review and a daily news watch."""
+
+    enabled: bool = False
+    model: str = "claude-sonnet-5-5"
+    effort: Effort = "medium"
+    watch_enabled: bool = False
+    watch_model: str = "claude-haiku-5-5"
+
+
+class CSleeve(_Strict):
+    """C's daily chart trades: a separate part with its own switch (backtest first)."""
+
+    enabled: bool = False
+    mode: Literal["shadow", "live"] = "shadow"
+    max_share: Fraction = 0.20  # of C's money
+    per_trade: Fraction = 0.05
+    breakout_days: int = Field(default=20, ge=5)
+    dip_rsi: float = Field(default=10.0, ge=1, le=50)  # RSI(2) below this, in an uptrend
+    hold_days: int = Field(default=7, ge=1, le=30)
+    stop_atr: float = Field(default=2.0, gt=0)
+    target_atr: float = Field(default=3.0, gt=0)
+
+
+class PortfolioConfig(_Strict):
+    """System C: the weekly trend-following ETF portfolio (docs/EXPERIMENT.md)."""
+
+    funds: tuple[FundSpec, ...] = ()
+    cash_fund: str = "SGOV"
+    top_n: int = Field(default=8, ge=1, le=30)
+    score_days: tuple[int, ...] = (63, 126, 252)  # momentum score: average return over these
+    check_days: tuple[int, ...] = (21, 63, 126, 252)  # eligible when most of these are positive
+    min_positive: int = Field(default=3, ge=1)
+    trend_days: int = Field(default=200, ge=20)
+    vol_days: int = Field(default=63, ge=20)
+    vol_target: Fraction = 0.10  # yearly volatility the portfolio aims for (never leveraged)
+    group_caps: dict[str, float] = Field(default_factory=lambda: {
+        "equity": 0.60, "commodity": 0.30, "crypto": 0.10, "managed_futures": 0.15})  # fmt: skip
+    drift_band: Fraction = 0.20  # trade a fund only when its weight is this far (relatively) off
+    min_trade_weight: Fraction = 0.01
+    drawdown_halve: Fraction = 0.10
+    drawdown_flat: Fraction = 0.15
+    flat_weeks: int = Field(default=4, ge=1)  # after going flat, wait this long, then start again
+    emergency_stop_pct: Fraction = 0.20  # a resting stop this far below every holding
+    limit_slippage_pct: Fraction = 0.003
+    cost_bps: float = Field(default=5.0, ge=0)  # per side, in backtests
+    upgrades: CUpgrades = CUpgrades()
+    veto: CVeto = CVeto()
+    sleeve: CSleeve = CSleeve()
+    plan_day: Literal["mon", "tue", "wed", "thu", "fri"] = "fri"
+    plan_time: time = time(16, 45)  # after the close: signals, review, the weekly plan
+    data_time: time = time(16, 30)
+    rebalance_time: time = time(9, 35)
+    watch_time: time = time(8, 0)
+    mirror_capital_usd: float = Field(default=1000.0, gt=0)  # the Avanza amounts are shown for this
+    sek_per_usd: float = Field(default=10.5, gt=0)  # approximate; update now and then
+
+    @model_validator(mode="after")
+    def _sane(self) -> Self:
+        if self.min_positive > len(self.check_days):
+            raise ValueError("portfolio.min_positive cannot exceed the number of check_days")
+        if not self.drawdown_halve < self.drawdown_flat:
+            raise ValueError("portfolio.drawdown_halve must be smaller than drawdown_flat")
+        return self
+
+    def by_ticker(self) -> dict[str, FundSpec]:
+        return {f.ticker: f for f in self.funds}
+
+
 class ExperimentConfig(_Strict):
     """X3. How the three-way experiment is measured (docs/PREREGISTRATION.md)."""
 
@@ -605,6 +699,7 @@ class AppConfig(_Strict):
     learning: LearningConfig = LearningConfig()
     decision: DecisionConfig = DecisionConfig()  # system B only
     experiment: ExperimentConfig = ExperimentConfig()  # the hub and the comparison
+    portfolio: PortfolioConfig = PortfolioConfig()  # system C only
 
     def models_in_use(self) -> set[str]:
         models = {self.judge.model, self.pattern_model.text_model}
@@ -660,6 +755,7 @@ class Settings(BaseSettings):
     fred_api_key: SecretStr | None = None
     marketdata_api_key: SecretStr | None = None  # system B, switch 8 (paid)
     fmp_api_key: SecretStr | None = None  # system B, switch 9 (paid)
+    tiingo_api_key: SecretStr | None = None  # system C's 20-year backtest (free)
     sec_user_agent: str | None = None
     wikipedia_contact: str | None = None
 
@@ -704,6 +800,7 @@ class Settings(BaseSettings):
             "fred_api_key",
             "marketdata_api_key",
             "fmp_api_key",
+            "tiingo_api_key",
             "sec_user_agent",
         )
         return {name.upper(): getattr(self, name) is not None for name in names}

@@ -74,16 +74,18 @@ jobs:
         run: |
           docker compose exec -T app papertrader check
           docker compose exec -T app-b papertrader check
+          docker compose exec -T app-c papertrader check
       - name: Backup and restore inside the containers
         run: |
           docker compose exec -T backup sh /scripts/backup.sh now
           dump=$(docker compose exec -T backup sh -c 'ls -1 /backups/papertrader-*.dump | tail -n 1' | tr -d '\r')
           echo "restoring $dump"
-          docker compose stop app app-b hub dashboard
+          docker compose stop app app-b app-c hub dashboard
           docker compose exec -T backup sh /scripts/restore.sh "$dump" --yes
-          docker compose start app app-b hub dashboard
+          docker compose start app app-b app-c hub dashboard
           docker compose exec -T app papertrader check
           docker compose exec -T app-b papertrader check
+          docker compose exec -T app-c papertrader check
       - name: Show logs on failure
         if: failure()
         run: docker compose logs --no-color

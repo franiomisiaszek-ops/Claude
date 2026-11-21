@@ -1436,3 +1436,145 @@ def experiment_start(
                 ).rowcount
                 session.commit()
             typer.echo(f"  {name}: {gone} older equity record(s) deleted")
+
+
+# --------------------------------------------------------------------------- system C
+
+
+@backtest_app.command("c")
+def backtest_c(
+    refresh: Annotated[
+        bool, typer.Option("--refresh", help="Download the price history again.")
+    ] = False,
+) -> None:
+    """System C's 20-year backtest: settings chosen on 2004-2015, tested once on 2016 to today."""
+    import json
+    from datetime import date as date_type
+
+    import httpx
+
+    from papertrader.c import backtest as bt
+    from papertrader.c.data import TBILL, DataError, fetch_tbill, fetch_tiingo, frames, store
+    from papertrader.c.models import BacktestRun, Price
+    from papertrader.db.types import utcnow
+    from papertrader.runtime import bootstrap
+
+    try:
+        runtime = bootstrap(migrate=True, log_format="console", system="C")
+    except (ConfigError, LiveTradingForbiddenError) as exc:
+        raise _fail(str(exc)) from exc
+    settings, cfg = runtime.settings, runtime.config.portfolio
+    tickers = sorted(
+        {f.ticker for f in cfg.funds}
+        | {f.stand_in for f in cfg.funds if f.stand_in}
+        | {"SPY", "IEF"}
+    )
+    from sqlalchemy import func, select
+
+    with runtime.session_factory() as session:
+        have = session.scalar(select(func.count(Price.id)).where(Price.source == "tiingo")) or 0
+    if refresh or not have:
+        if settings.tiingo_api_key is None:
+            raise _fail(
+                "TIINGO_API_KEY is not set in .env (free at tiingo.com): it is needed for the price history."
+            )
+        start = date_type(2003, 1, 1)
+        with httpx.Client() as client, runtime.session_factory() as session:
+            for ticker in tickers:
+                try:
+                    rows = fetch_tiingo(
+                        client, settings.tiingo_api_key.get_secret_value(), ticker, start
+                    )
+                except DataError as exc:
+                    raise _fail(str(exc)) from exc
+                typer.echo(f"  {ticker}: {len(rows)} days")
+                store(session, "tiingo", rows)
+                session.commit()
+            if settings.fred_api_key is not None:
+                try:
+                    store(
+                        session,
+                        "fred",
+                        fetch_tbill(client, settings.fred_api_key.get_secret_value(), start),
+                    )
+                    session.commit()
+                except DataError as exc:
+                    typer.echo(f"  T-bill rate not loaded ({exc}); BIL is used where it exists")
+    with runtime.session_factory() as session:
+        prices = frames(session, "tiingo", tickers)
+        rate = frames(session, "fred", [TBILL])["close"]
+    if prices["close"].empty:
+        raise _fail("no price history stored yet")
+    tbill = rate.get(TBILL)
+    typer.echo("Running (a few minutes)...")
+    result = bt.walk_forward(prices, cfg, tbill)
+    if "error" in result:
+        raise _fail(result["error"])
+    with runtime.session_factory() as session:
+        session.add(BacktestRun(ran_at=utcnow(), data_from=prices["close"].index[0], data_to=prices["close"].index[-1],
+                                chosen=result["chosen"], result=json.loads(json.dumps(result, default=str)),
+                                verdict=result["verdict"]))  # fmt: skip
+        session.commit()
+
+    def row(name: str, s: dict[str, Any] | None) -> str:
+        if not s:
+            return f"  {name:<14} n/a"
+        return (f"  {name:<14} {s['cagr']:+6.1%} a year  Sharpe {s['sharpe']:5.2f}  worst fall {s['max_drawdown']:6.1%}  "
+                f"worst year {s['worst_year']:+6.1%}")  # fmt: skip
+
+    for period, label in (
+        ("in_sample", "2004-2015 (settings chosen here)"),
+        ("out_of_sample", "2016 to today (unseen)"),
+    ):
+        typer.echo(f"\n{label}:")
+        typer.echo(row("C", result["c"][period]))
+        typer.echo(row("SPY", result["spy"][period]))
+        typer.echo(row("60/40", result["sixty_forty"][period]))
+    typer.echo(f"\nChosen settings: {result['chosen']}")
+    typer.echo("Upgrades (on only if they helped in BOTH periods):")
+    for name, u in result["upgrades"].items():
+        typer.echo(f"  {name:<16} {'switch ON' if u['recommend'] else 'keep off'}")
+    sleeve = result["sleeve"]
+    typer.echo(f"Daily chart trades: {'switch ON (then shadow first)' if sleeve['recommend'] else 'keep off'}"
+               f" ({sleeve['out_of_sample']['trades']} trades on the unseen years)")  # fmt: skip
+    typer.secho("Verdict: " + result["verdict"], bold=True)
+    typer.echo("Send me this output; I will set config/c.yaml from it.")
+
+
+@app.command()
+def portfolio() -> None:
+    """System C: the latest weekly plan, what it holds, and its state."""
+    from sqlalchemy import select
+
+    from papertrader.c.live import STATE_KEY, sleeve_record
+    from papertrader.c.models import Plan
+    from papertrader.db.state import get_state
+    from papertrader.runtime import bootstrap
+
+    try:
+        runtime = bootstrap(log_format="console", system="C")
+    except (ConfigError, LiveTradingForbiddenError) as exc:
+        raise _fail(str(exc)) from exc
+    with runtime.session_factory() as session:
+        plan = session.scalars(select(Plan).order_by(Plan.signal_day.desc()).limit(1)).first()
+        state = get_state(session, STATE_KEY)
+        record = sleeve_record(session)
+    typer.echo(
+        "State: "
+        + (
+            f"{state['state']} (peak equity ${float(state['peak']):,.0f})"
+            if state
+            else "no plan yet"
+        )
+    )
+    if plan is None:
+        typer.echo("No weekly plan yet: the first one is made after Friday's close.")
+        return
+    typer.echo(
+        f"Latest plan: signals {plan.signal_day:%a %d %b}, orders {plan.trade_day:%a %d %b}, {plan.status}"
+    )
+    for ticker, weight in sorted(plan.targets.items(), key=lambda kv: -kv[1]):
+        typer.echo(f"  {ticker:<5} {weight:6.1%}")
+    if record["trades"]:
+        typer.echo(f"Daily chart trades (shadow): {record['trades']} done, {record['wins']} won, "
+                   f"average {record['average']:+.2%} after costs")  # fmt: skip
