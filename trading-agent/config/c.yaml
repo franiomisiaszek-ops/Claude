@@ -210,13 +210,13 @@ portfolio:
     - { ticker: SGOV, group: cash, cap: 1.0, stand_in: BIL,
         avanza: "iShares $ Treasury Bond 0-1yr UCITS ETF (IB01), or a SEK money-market fund" }
   cash_fund: SGOV
-  top_n: 8                     # hold the best 8 eligible funds
-  score_days: [63, 126, 252]   # momentum: average return over 3, 6 and 12 months
+  top_n: 6                     # hold the best 6 eligible funds (chosen by the backtest, 2004-2015)
+  score_days: [126, 252]       # momentum: average return over 6 and 12 months (backtest)
   check_days: [21, 63, 126, 252]
   min_positive: 3              # eligible when 3 of these 4 returns are positive...
   trend_days: 200              # ...and the price is above its 200-day average
   vol_days: 63
-  vol_target: 0.10             # aim for 10% yearly swings; never borrow to get there
+  vol_target: 0.08             # aim for 8% yearly swings (backtest); never borrow to get there
   group_caps: { equity: 0.60, commodity: 0.30, crypto: 0.10, managed_futures: 0.15 }
   drift_band: 0.20             # trade a fund only when it is 20% off its target weight
   min_trade_weight: 0.01
@@ -226,8 +226,8 @@ portfolio:
   emergency_stop_pct: 0.20     # a resting stop 20% below every holding
   limit_slippage_pct: 0.003
   cost_bps: 5
-  upgrades:                    # off until the backtest shows they help on the unseen years
-    cash_in_tbills: false
+  upgrades:                    # on only those that helped in both backtest periods (run of 2026-11-21)
+    cash_in_tbills: true       # helped in both: idle cash earns the T-bill rate (SGOV)
     dual_momentum: false
     risk_parity: false
     managed_futures: false

@@ -306,6 +306,23 @@ shows they add profit on the years it never saw, and then run in shadow mode fir
 
 Any time: `docker compose exec app-c papertrader portfolio` shows the latest plan.
 
+**The result (run on 21 Nov 2026, prices with dividends, after costs).**
+
+| | 2004-2015 (settings chosen here) | 2016 to Nov 2026 (never seen) |
+|---|---|---|
+| C | +3.5% a year, Sharpe 0.36, worst fall -12% | +4.9% a year, Sharpe 0.39, worst fall -12% |
+| SPY | +7.3% a year, Sharpe 0.40, worst fall -55% | +13.8% a year, Sharpe 0.69, worst fall -34% |
+| 60/40 | +7.0% a year, Sharpe 0.57, worst fall -32% | +8.9% a year, Sharpe 0.65, worst fall -21% |
+
+Chosen and now in `config/c.yaml`: momentum over 6 and 12 months, 8% volatility target,
+the best 6 funds; idle cash in T-bills (the only upgrade that helped in both periods; the C
+rows above are without it). Dual momentum, risk parity, managed futures and the daily chart
+trades stay off. Honest reading: in the backtest C earned far less than SPY, and less than
+60/40 even counting its smaller swings (lower Sharpe). Its one strength is the shallow
+worst fall (-12% against -34% to -55%). C does not meet its target; it stays in the
+experiment unchanged, because tuning it on the 2016-2026 years would make that test
+meaningless. The decision rule (docs/PREREGISTRATION.md) still defaults to holding SPY.
+
 ## Plan for system C (phase X4)
 
 C's rules are set with a 20-year backtest **before** it trades, then frozen.
@@ -498,6 +515,7 @@ So the comparison stays fair, A must not change during the experiment:
 | 2026-11-20 | B's post-mortems and capped lessons (phase X2c) | B only |
 | 2026-11-20 | The measurement rules pre-registered (docs/PREREGISTRATION.md, phase X3) | all |
 | 2026-11-21 | System C built (phase X4); its settings follow the backtest before the start | C only |
+| 2026-11-21 | C's settings set from its 20-year backtest (6 and 12-month momentum, 8% volatility, best 6 funds, cash in T-bills) | C only |
 
 ## How the data is kept apart (for the curious)
 
