@@ -50,10 +50,13 @@ x-base: &base
     db:
       condition: service_healthy
 
+# One image for B, C, the hub and the dashboard. Only app-b builds it: when four services
+# built the same image at once, Docker Desktop's builder could drop out ("error reading
+# from server: EOF"). The others reuse the image app-b just built.
 x-app: &app
   <<: *base
-  build: .
   image: papertrader:local
+  pull_policy: never   # built on this computer, never downloaded
 
 x-health: &health
   # Healthy while this system's heartbeat in the database is fresh.
@@ -94,6 +97,7 @@ services:
 
   app-b:
     <<: *app
+    build: .   # the only service that builds papertrader:local (see x-app above)
     environment:
       <<: *env
       SYSTEM: "B"
