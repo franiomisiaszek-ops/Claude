@@ -29,7 +29,7 @@ points at the paper endpoint, and they refuse to start if two systems share a ke
 | X6 | Telegram upgrade: a heads-up with Skip / Go now before every order, no cut-off messages, news bullets, `/ask`, quiet hours (see below) | **done** |
 
 B judges the same research as A, then changes the decision with its switches (next
-section). The official start date, when all three accounts begin at $25,000, is set in X3.
+section). The official start, when all three accounts begin at $25,000, is Monday 30 Nov 2026.
 
 ## System B's switches (phase X2)
 
@@ -242,25 +242,27 @@ docker compose exec hub papertrader experiment report
 
 The web app's Compare tab shows the same numbers with charts ([WEBAPP.md](WEBAPP.md)).
 
-### The official start (not yet)
+### The official start: Monday 30 November 2026
 
-The test starts on one day for everyone, with $25,000 in each account. I will tell you
-when; probably the Monday after system C (phase X4) is running, so all three start
-together. That day's steps will be:
+All three systems start together on Monday 30 Nov (chosen on 22 Nov instead of 7 Dec: one
+more week of results, and C's first weekly plan is made on Friday 27 Nov so C trades from
+day one). The week before is the shake-down. The steps (you get a reminder for each):
 
-1. On the Friday before, after the close: pause the systems on Telegram (`/pause A start`,
-   `/pause B start`) and close any open positions (`docker compose exec app papertrader
-   trade close TICKER`, and the same with `app-b`).
-2. Over the weekend, reset each Alpaca paper account to $25,000. If a reset gives an
-   account new keys, put them in `.env`.
-3. Record the start, and delete the equity history from before it so each system's own
-   "since start" figures begin at $25,000:
+1. **Friday 27 Nov, after the close (19:15 Polish time; a half day):** pause the systems
+   on Telegram (`/pause A start`, `/pause B start`, `/pause C start`) and close any open
+   positions (`docker compose exec app papertrader trade close TICKER`, and the same with
+   `app-b` and `app-c`). C still makes its weekly plan that evening.
+2. **Saturday 28 Nov, 10:00:** look at B's intraday scanner after one week in shadow mode
+   (it stays in shadow mode unless it clearly earned its place).
+3. **Sunday 29 Nov, 18:00:** check C's plan (`docker compose exec app-c papertrader
+   portfolio`), reset each Alpaca paper account to $25,000 (new keys go in `.env`), then
+   record the start and delete the equity history from before it:
 
    ```bash
-   docker compose exec hub papertrader experiment start --date 2026-12-07 --clear-old-equity
+   docker compose exec hub papertrader experiment start --date 2026-11-30 --clear-old-equity
    ```
 
-   (with the real date). Then `/resume A` and `/resume B` on Telegram.
+   Then `/resume A`, `/resume B` and `/resume C` on Telegram.
 
 ## System C day to day (phase X4)
 
@@ -534,6 +536,7 @@ So the comparison stays fair, A must not change during the experiment:
 | 2026-11-21 | C's settings set from its 20-year backtest (6 and 12-month momentum, 8% volatility, best 6 funds, cash in T-bills) | C only |
 | 2026-11-21 | The iPhone web app replaces the dashboard; the hub stores live account numbers for it (phase X5) | none (display only) |
 | 2026-11-22 | Telegram upgrade (phase X6): B and C announce each order 3 minutes ahead with Skip / Go now; A's heads-ups are information only, written by the hub | B and C: an order you skip is not sent. A unchanged |
+| 2026-11-22 | Official start set to Monday 30 Nov 2026 (instead of 7 Dec) | all |
 
 ## How the data is kept apart (for the curious)
 
