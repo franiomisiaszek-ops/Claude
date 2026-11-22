@@ -315,6 +315,7 @@ class Planned:
     against: str = ""
     status: str = ""
     skip_ticker: str | None = None  # set when the web app may skip it (B's intraday plans)
+    skip_order: int | None = None  # an announced order of B or C (its heads-up number)
 
 
 @dataclass
@@ -362,7 +363,22 @@ def planned(views: Mapping[str, View], now: datetime) -> tuple[list[Planned], CP
                                      f"exit: {signal.trigger.value.replace('_', ' ')}", clip(signal.reason, 400)))  # fmt: skip
         if view.name == "B":
             items.extend(_b_intraday(view, today_ny))
+    for name in ("B", "C"):
+        if name in views:
+            items.extend(_announced(views[name]))
     return items, (_c_plan(views["C"], now) if "C" in views else None)
+
+
+def _announced(view: View) -> list[Planned]:
+    """Orders with a Telegram heads-up that have not gone yet (X6): Skip works here too."""
+    from papertrader.notify.warnings import GO, SOURCE_WORDS, WAITING, OrderWarning
+
+    with view.sessions() as session:
+        rows = session.scalars(select(OrderWarning).where(OrderWarning.status.in_((WAITING, GO)))
+                               .order_by(OrderWarning.due_at)).all()  # fmt: skip
+        return [Planned(view.name, f"at {ny(r.due_at, '%H:%M')} unless skipped" + (" (Go now)" if r.status == GO else ""),
+                        r.side, r.ticker, f"announced on Telegram · {SOURCE_WORDS.get(r.source, r.source)}",
+                        "", "", "announced", None, r.id) for r in rows]  # fmt: skip
 
 
 def _b_intraday(view: View, day: date) -> list[Planned]:

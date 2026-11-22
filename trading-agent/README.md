@@ -30,7 +30,7 @@ A multi-agent stock research system that **paper-trades** on Alpaca and reports 
 | 7 | Learning loop + scheduler | **done** (runs by itself once the app is up, see below) |
 | 8 | Dashboard + deployment guide | **done** (the dashboard is now the web app, X5) |
 | 9 | Run on paper for 4-8 weeks | replaced by the three-way experiment |
-| X0-X6 | **Three-way experiment**: A (this system, frozen) vs B (better decisions) vs C (ETF trend portfolio), each on its own paper account | X0-X5 **done**; see [docs/EXPERIMENT.md](docs/EXPERIMENT.md) |
+| X0-X6 | **Three-way experiment**: A (this system, frozen) vs B (better decisions) vs C (ETF trend portfolio), each on its own paper account | X0-X6 **done**; see [docs/EXPERIMENT.md](docs/EXPERIMENT.md) |
 
 Right now the program can load and refresh all its data, run the research agents and the
 judge, trade their decisions on the Alpaca paper account, send everything to you on
@@ -450,6 +450,29 @@ docker compose run --rm app papertrader telegram weekly
 `send` sends waiting messages now, `brief` sends today's morning brief (needs today's
 research run), `weekly` sends the weekly summary. The app sends the brief (08:45), the
 end-of-day summary (16:15) and the weekly summary (Saturday) by itself.
+
+### The Telegram upgrade (phase X6)
+
+- **A heads-up before every order** systems B and C send themselves: buys at the open,
+  B's intraday buys, time-limit sells, thesis-break sells and the judge's sells. It comes
+  3 minutes before (`telegram.warnings.minutes`) with: system, BUY or SELL, ticker,
+  shares, limit or zone, target, stop, expected holding time, confidence, the reasons as
+  bullets and the strongest argument against. Buttons: **Skip** (per order) and **Go
+  now**. No answer = it goes ahead. A skipped sell holds for the rest of the day.
+  Orders at the open never go before 09:35, so there Go now only confirms.
+- **System A's** heads-ups are information only (no buttons): A is the frozen
+  comparison. The hub writes them, since A's own code can't change.
+- **Stops and targets** fill at Alpaca and can't be announced. Instead you get a warning
+  when a price comes within 0.5% of one.
+- **Nothing is cut short**: long texts arrive as several messages ("part 2 of 3"); long
+  reports end with a link to the matching web app page once `web.public_url` is set.
+- **News as bullet points**: what happened, why it matters for the stock (the agent's
+  own reading, else the stored labels), the source and a link.
+- **`/ask <question>`** (add A, B or C for one system): plain answers from the systems'
+  own data, on a cheap model, with its own $2 a month budget. It never counts against a
+  system's budget or the experiment's costs.
+- **Quiet hours** (23:00-07:00 Polish time, `telegram.quiet_hours`): routine messages wait
+  until morning; alerts and order warnings always go.
 
 ## The daily schedule and the learning loop (Phase 7)
 

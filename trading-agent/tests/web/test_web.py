@@ -493,3 +493,28 @@ def test_the_web_app_holds_no_keys() -> None:
     )
     assert web["ports"] == ["127.0.0.1:8501:8501"]
     assert "dashboard" not in compose["services"]  # the web app replaced the Streamlit dashboard
+
+
+def test_announced_orders_can_be_skipped_from_the_web_app(systems: dict[str, Engine], database_url: str,
+                                                          tmp_path: Path) -> None:  # fmt: skip
+    """X6: an order announced on Telegram shows on Planned with a Skip button."""
+    from papertrader.config import WarningsConfig
+    from papertrader.notify.warnings import SKIPPED, Gate, OrderWarning, Pending
+
+    gate = Gate(make_session_factory(systems["C"]), WarningsConfig(), now=lambda: NOW)
+    gate.warn(
+        [Pending(ref="c:1:GLD:buy", side="BUY", ticker="GLD", source="rebalance")], early=False
+    )
+    client = make_client(database_url, tmp_path)
+    log_in(client)
+    with make_session_factory(systems["C"])() as session:
+        warning_id = session.scalars(select(OrderWarning)).one().id
+    assert f"/confirm?a=skiporder&amp;s=C&amp;t={warning_id}" in client.get("/planned").text
+    assert client.get("/confirm?a=skiporder&s=A&t=1").status_code == 400  # A's are information only
+    token = csrf(client, f"/confirm?a=skiporder&s=C&t={warning_id}")
+    client.post(
+        "/action",
+        data={"a": "skiporder", "s": "C", "t": str(warning_id), "confirm": "yes", "csrf": token},
+    )
+    with make_session_factory(systems["C"])() as session:
+        assert session.scalars(select(OrderWarning)).one().status == SKIPPED

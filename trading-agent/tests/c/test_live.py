@@ -189,6 +189,7 @@ def test_the_daily_chart_trades_in_shadow(c_engine: Engine) -> None:
 def test_cs_jobs() -> None:
     names = {s.name for s in specs_for("C", c_config())}
     assert names == {
+        "c_warn",  # X6: the heads-up before the weekly orders
         "c_rebalance",
         "monitor",
         "reconcile_eod",
@@ -203,3 +204,50 @@ def test_cs_jobs() -> None:
     assert plan.weekday is not None and plan.weekday(c_config()) == "fri"
     others = {s.name for s in specs_for("A")} | {s.name for s in specs_for("B")}
     assert not {"c_plan", "c_data", "c_rebalance"} & others
+
+
+def test_the_weekly_orders_wait_for_their_heads_up(c_engine: Engine) -> None:
+    """X6: a heads-up at 09:32 with a Skip per fund; the orders go in at 09:35."""
+    from papertrader.config import WarningsConfig
+    from papertrader.notify.warnings import SENT, SKIPPED, Gate, OrderWarning, tap
+
+    broker, env = seeded(c_engine)
+    config = c_config()
+    sessions = make_session_factory(c_engine)
+    asyncio.run(live.plan_week(sessions, config, broker, None, FRIDAY_EVENING))
+    clock = env["clock"]
+    clock[0] = datetime(2026, 11, 23, 14, 32, tzinfo=UTC)  # Monday 09:32 New York
+    gate = Gate(sessions, WarningsConfig(), now=lambda: clock[0])
+    assert live.warn_week(sessions, config, broker, gate, clock[0])["orders"] > 0
+    with sessions() as session:
+        rows = session.scalars(select(OrderWarning).order_by(OrderWarning.id)).all()
+        text = (
+            session.scalars(select(m.Notification).where(m.Notification.kind == "order_warning"))
+            .one()
+            .text
+        )
+        skipped = rows[0].ticker
+        tap(session, f"ow:{rows[0].id}:skip", clock[0])
+        session.commit()
+    assert "HEADS-UP" in text and "weekly rebalance" in text and "limit $" in text
+    clock[0] = datetime(2026, 11, 23, 14, 33, tzinfo=UTC)
+    waiting = live.rebalance(sessions, config, broker, clock[0], gate)
+    assert waiting["orders"] == 0 and waiting["waiting"] == len(rows) - 1
+    with sessions() as session:
+        assert session.scalars(select(Plan)).one().attempts == 0  # waiting is not an attempt
+    clock[0] = datetime(2026, 11, 23, 14, 36, tzinfo=UTC)
+    out = live.rebalance(sessions, config, broker, clock[0], gate)
+    with sessions() as session:
+        ordered = {
+            o.ticker for o in session.scalars(select(Order).where(Order.kind == "rebalance"))
+        }
+        plan = session.scalars(select(Plan)).one()
+        statuses = {r.ticker: r.status for r in session.scalars(select(OrderWarning))}
+    assert (
+        out["orders"] == len(rows) - 1
+        and skipped not in ordered
+        and f"Skipped by you: buy {skipped}" in plan.note
+    )
+    assert statuses[skipped] == SKIPPED and all(
+        s == SENT for t, s in statuses.items() if t != skipped
+    )

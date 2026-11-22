@@ -23,14 +23,16 @@ class SchemaNotReadyError(ConfigError):
 
 def extra_tables(system: SystemName) -> list[Table]:
     """Tables only this system has (outside the shared definitions, see b/models.py)."""
+    from papertrader.notify.warnings import WarnBase  # X6: the order warnings, B and C
+
     if system == "B":
         from papertrader.b.models import BBase
 
-        return list(BBase.metadata.sorted_tables)
+        return [*BBase.metadata.sorted_tables, *WarnBase.metadata.sorted_tables]
     if system == "C":
         from papertrader.c.models import CBase
 
-        return list(CBase.metadata.sorted_tables)
+        return [*CBase.metadata.sorted_tables, *WarnBase.metadata.sorted_tables]
     return []
 
 

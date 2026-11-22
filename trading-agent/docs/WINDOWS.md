@@ -130,7 +130,9 @@ You don't need to do anything: Telegram tells you what happens. To look closer:
   ([WEBAPP.md](WEBAPP.md)). A, B and C side by side, the comparison, trades, planned
   trades, decisions and agent reports (with sources), news, post-mortems, costs, jobs.
   Read-only apart from Pause / Resume / Skip, which ask you to confirm.
-- **Bot**: `/status`, `/positions`, `/pnl`, `/brief`, `/pause`, `/resume`.
+- **Bot**: `/status`, `/positions`, `/pnl`, `/brief`, `/pause`, `/resume`, `/skip`, `/why`,
+  `/ask <question>`. Orders of B and C come with a heads-up and Skip / Go now buttons
+  3 minutes before; no answer means they go ahead.
 - **Today's jobs**:
 
   ```bash

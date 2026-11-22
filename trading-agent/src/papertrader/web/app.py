@@ -437,7 +437,7 @@ def create_app(settings: Settings | None = None, config: AppConfig | None = None
                 token,
                 status=400,
             )
-        back = "/planned" if action.kind == "skip" else "/settings"
+        back = "/planned" if action.kind in ("skip", "skiporder") else "/settings"
         return render(
             request,
             "confirm.html",
@@ -472,7 +472,7 @@ def create_app(settings: Settings | None = None, config: AppConfig | None = None
                       result=message)  # fmt: skip
         state.compare_cache = None
         response = RedirectResponse(
-            "/planned" if action.kind == "skip" else "/settings", status_code=303
+            "/planned" if action.kind in ("skip", "skiporder") else "/settings", status_code=303
         )
         response.set_cookie(
             FLASH,

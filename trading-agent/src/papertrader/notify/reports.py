@@ -46,9 +46,10 @@ def first_sentence(text: str, limit: int = 140) -> str:
 
 
 def format_brief(
-    day: date, summary: str, trades: Sequence[BriefTrade], positions: Sequence[str]
-) -> str:
-    lines = [f"Morning brief · {day:%a %d %b}", f"Market: {clip(summary, 500)}", ""]
+    day: date, summary: str, trades: Sequence[BriefTrade], positions: Sequence[str],
+    news: Sequence[str] = (),
+) -> str:  # fmt: skip
+    lines = [f"Morning brief · {day:%a %d %b}", f"Market: {summary}", ""]
     if not trades:
         lines.append("No trades today: nothing passed the bar.")
     else:
@@ -62,8 +63,10 @@ def format_brief(
             lines.append(f"{t.rank}. {ACTION_WORDS.get(t.action, t.action.upper())} {t.ticker} · "
                          f"{t.confidence:.0%} · entry {zone} · target {t.target:.2f} · stop {t.stop:.2f}")  # fmt: skip
             note = f" ({NOT_TRADED[t.status]})" if t.status in NOT_TRADED else ""
-            lines.append(f"   {first_sentence(t.reason)}{note}")
+            lines.append(f"   {first_sentence(t.reason, 400)}{note}")
     lines += ["", "Open positions: " + (", ".join(positions) if positions else "none")]
+    if news:
+        lines += ["", "News on held stocks (last 24 hours):", *news]
     return "\n".join(lines)
 
 
@@ -106,7 +109,14 @@ def build_brief(
                    i.target_price, i.stop_price, i.rationale, i.status.value)
         for i in ideas
     ]  # fmt: skip
-    return format_brief(day, decision.market_summary, trades, open_trade_labels(session, prices))
+    from papertrader.notify.news import bullets
+
+    held = [t.ticker for t in session.scalars(select(m.Trade).where(m.Trade.status == m.TradeStatus.OPEN,
+                                                                    m.Trade.is_test.is_(False)))]  # fmt: skip
+    news = bullets(session, held, now) if held else []
+    return format_brief(
+        day, decision.market_summary, trades, open_trade_labels(session, prices), news
+    )
 
 
 # --------------------------------------------------------------------------- weekly

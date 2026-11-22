@@ -78,7 +78,8 @@ def load(engine: Engine, name: str, start: date) -> Record:
         ):  # fmt: skip
             record.equity[new_york_date(ts)] = float(equity)  # the last one of a day wins
         for ts, cost in session.execute(
-            select(m.ApiUsage.ts, m.ApiUsage.cost_usd).where(m.ApiUsage.ts >= at_new_york(start, time(0)))
+            select(m.ApiUsage.ts, m.ApiUsage.cost_usd).where(m.ApiUsage.ts >= at_new_york(start, time(0)),
+                                                             m.ApiUsage.purpose != "ask")  # your /ask questions
         ):  # fmt: skip
             day = new_york_date(ts)
             record.spend[day] = record.spend.get(day, 0.0) + float(cost or 0.0)

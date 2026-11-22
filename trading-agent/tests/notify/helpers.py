@@ -40,6 +40,8 @@ class FakeTelegram:
             return ok([u for u in self.updates if u["update_id"] >= offset])
         if method == "getMe":
             return ok({"id": 1, "username": "my_papertrader_bot", "first_name": "Papertrader"})
+        if method in ("answerCallbackQuery", "editMessageReplyMarkup"):
+            return ok(True)
         return error(404, "Not Found")
 
     def client(self) -> TelegramClient:
@@ -52,6 +54,16 @@ class FakeTelegram:
         if date is not None:
             message["date"] = int(date)
         self.updates.append({"update_id": update_id, "message": message})
+
+    def tap(self, data: str, message_id: int, *, chat: str = CHAT) -> None:
+        """A tap on an inline button (X6)."""
+        update_id = len(self.updates) + 1
+        self.updates.append({"update_id": update_id, "callback_query": {
+            "id": f"cb{update_id}", "data": data, "from": {"id": int(chat)},
+            "message": {"message_id": message_id, "chat": {"id": int(chat)}}}})  # fmt: skip
+
+    def method_calls(self, method: str) -> list[dict[str, Any]]:
+        return [payload for name, payload in self.calls if name == method]
 
     def texts(self) -> list[str]:
         return [p["text"] for p in self.sent]

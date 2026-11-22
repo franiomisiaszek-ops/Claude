@@ -26,7 +26,7 @@ points at the paper endpoint, and they refuse to start if two systems share a ke
 | X3 | Measurement: the pre-registered test, the weekly comparison, the comparison page (see below) | done |
 | X4 | System C: the weekly ETF portfolio, its 20-year backtest, the Avanza list (see below) | done (settings set from the backtest) |
 | X5 | iPhone web app over Tailscale ([WEBAPP.md](WEBAPP.md)); replaces the Streamlit dashboard | **done** (needs your set-up) |
-| X6 | Telegram upgrade (warnings before orders, Skip button, no length limit) | not started |
+| X6 | Telegram upgrade: a heads-up with Skip / Go now before every order, no cut-off messages, news bullets, `/ask`, quiet hours (see below) | **done** |
 
 B judges the same research as A, then changes the decision with its switches (next
 section). The official start date, when all three accounts begin at $25,000, is set in X3.
@@ -323,6 +323,22 @@ worst fall (-12% against -34% to -55%). C does not meet its target; it stays in 
 experiment unchanged, because tuning it on the 2016-2026 years would make that test
 meaningless. The decision rule (docs/PREREGISTRATION.md) still defaults to holding SPY.
 
+## Telegram heads-ups (phase X6)
+
+**What changes for the experiment.** Nothing waits for you: an order goes ahead unless
+you tap **Skip**. A skip is a human decision, so it is recorded (the order warning
+and, for sells, an exit note) and the weekly comparison counts it as part of that system.
+If you want a clean test of B and C as built, don't skip; use Skip only for real
+emergencies. A's warnings have no buttons, so A stays an untouched comparison.
+
+**Timing.** Buys at the open and C's Monday orders are announced at 09:32 and go in at
+09:35, as before. Sells the systems decide during the day (time limits, thesis breaks)
+and B's intraday buys are announced and go 3 minutes later (or at once after Go now): a
+one-minute check sends them. A skipped sell holds for that day and is asked again the
+next day. Kill-switch and drawdown exits are never delayed.
+
+**/ask** runs on Haiku with its own $2 a month and is left out of every system's costs.
+
 ## Plan for system C (phase X4)
 
 C's rules are set with a 20-year backtest **before** it trades, then frozen.
@@ -517,6 +533,7 @@ So the comparison stays fair, A must not change during the experiment:
 | 2026-11-21 | System C built (phase X4); its settings follow the backtest before the start | C only |
 | 2026-11-21 | C's settings set from its 20-year backtest (6 and 12-month momentum, 8% volatility, best 6 funds, cash in T-bills) | C only |
 | 2026-11-21 | The iPhone web app replaces the dashboard; the hub stores live account numbers for it (phase X5) | none (display only) |
+| 2026-11-22 | Telegram upgrade (phase X6): B and C announce each order 3 minutes ahead with Skip / Go now; A's heads-ups are information only, written by the hub | B and C: an order you skip is not sent. A unchanged |
 
 ## How the data is kept apart (for the curious)
 

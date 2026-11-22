@@ -116,6 +116,20 @@ telegram:
   poll_timeout_seconds: 25   # how long the bot waits for a command per request
   max_attempts: 5
   brief_max_trades: 5
+  # X6. A heads-up before every order B and C send themselves, with Skip and Go now
+  # (A's are information only). No answer = the order goes ahead.
+  warnings:
+    enabled: true
+    minutes: 3            # how long before the order
+    near_pct: 0.005       # warn when a price is within 0.5% of a stop or target
+  # No routine messages at night (your time). Alerts and order warnings always go.
+  quiet_hours:
+    enabled: true
+    start: "23:00"
+    end: "07:00"
+    timezone: Europe/Warsaw
+  ask_model: claude-haiku-5-5   # /ask answers
+  ask_monthly_usd: 2            # /ask's own budget, outside every system's
 
 # Learning loop: scoring past agent calls, agent weights, weekly lessons.
 learning:
@@ -196,3 +210,5 @@ web:
   allowed_hosts: [localhost, 127.0.0.1, "*.ts.net"]
   lockout_after: 5          # wrong passwords before logins are locked for a while
   lockout_max_minutes: 60
+  # Your app's Tailscale address (optional); long Telegram reports then link to it.
+  public_url: ""            # e.g. "https://my-pc.tail1234.ts.net"

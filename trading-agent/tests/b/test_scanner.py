@@ -302,9 +302,11 @@ def test_live_mode_waits_for_skip_then_places_and_time_stops(
     with sessions() as session:
         plan = session.scalars(select(IntradayPlan)).one()
         assert plan.status == "planned"
-        alert = session.scalars(select(m.Notification)).one().text
-    assert alert.startswith("PLANNED BUY · AAPL") and "unless you send /skip AAPL" in alert
-    assert "shares (about $" in alert
+        note = session.scalars(select(m.Notification)).one()
+        alert = note.text
+    # X6: a heads-up with Skip / Go now buttons (the hub adds them), not a plain message
+    assert note.kind == "order_warning" and alert.startswith("HEADS-UP · BUY AAPL at ")
+    assert " shares · limit $" in alert and "No answer = it goes ahead" in alert
 
     clock = [NOW + timedelta(minutes=2)]
     broker = FakeBroker(clock, equity=25_000.0)

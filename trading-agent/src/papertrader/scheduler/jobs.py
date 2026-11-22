@@ -31,6 +31,7 @@ from papertrader.llm.client import BudgetExceededError, ClaudeClient, make_anthr
 from papertrader.llm.governor import CostGovernor
 from papertrader.notify import messages
 from papertrader.notify.alerts import job_failed
+from papertrader.notify.ask import ASK_PURPOSE
 from papertrader.notify.outbox import queue
 from papertrader.runtime import Runtime
 from papertrader.trading.broker import Broker, TradingDay
@@ -72,12 +73,16 @@ SPECS: tuple[JobSpec, ...] = (
     JobSpec("b_signals", "system B's extra signals: insider clusters, options, analysts", lambda c: c.schedule.b_signals),
     JobSpec("judge", "pattern-model scores and the judge's decision", lambda c: c.schedule.score_and_judge),
     JobSpec("morning_brief", "Telegram morning brief", lambda c: c.schedule.morning_brief),
+    JobSpec("warn_orders", "Telegram heads-up (Skip / Go now) for the orders at the open",
+            lambda c: _before(c.schedule.place_orders, c.telegram.warnings.minutes)),
     JobSpec("place_orders", "sell what the judge dropped, then place today's orders", lambda c: c.schedule.place_orders),
     JobSpec("monitor", "fills, time stops, kill switch, bad news on held stocks", None),
     JobSpec("intraday", "system B's intraday scanner: plans, orders after the /skip window, time stops", None,
             every=lambda c: c.decision.intraday.interval_minutes),
     JobSpec("c_watch", "system C: Claude reads the news on its funds and alerts (never trades)",
             lambda c: c.portfolio.watch_time),
+    JobSpec("c_warn", "system C: Telegram heads-up (Skip / Go now) for the weekly orders",
+            lambda c: _before(c.portfolio.rebalance_time, c.telegram.warnings.minutes)),
     JobSpec("c_rebalance", "system C: the weekly limit orders (and a retry the next day)",
             lambda c: c.portfolio.rebalance_time),
     JobSpec("c_data", "system C: its funds' daily prices", lambda c: c.portfolio.data_time),
@@ -93,8 +98,8 @@ SPECS: tuple[JobSpec, ...] = (
 BY_NAME = {spec.name: spec for spec in SPECS}
 
 # B reuses A's research and does not load market data; C gets its own jobs in Phase X4.
-B_ONLY = ("postmortems", "b_signals", "intraday", "fable_shadow")
-C_ONLY = ("c_watch", "c_rebalance", "c_data", "c_sleeve", "c_plan")
+B_ONLY = ("postmortems", "b_signals", "intraday", "fable_shadow", "warn_orders")
+C_ONLY = ("c_watch", "c_warn", "c_rebalance", "c_data", "c_sleeve", "c_plan")
 SYSTEM_JOBS: dict[str, tuple[str, ...]] = {
     "A": tuple(spec.name for spec in SPECS if spec.name not in B_ONLY + C_ONLY),
     "B": (
@@ -102,6 +107,7 @@ SYSTEM_JOBS: dict[str, tuple[str, ...]] = {
         "b_signals",
         "judge",
         "morning_brief",
+        "warn_orders",
         "place_orders",
         "monitor",
         "intraday",
@@ -110,7 +116,16 @@ SYSTEM_JOBS: dict[str, tuple[str, ...]] = {
         "resolve_outcomes",
         "weekly",
     ),
-    "C": ("c_watch", "c_rebalance", "monitor", "reconcile_eod", "c_data", "c_sleeve", "c_plan"),
+    "C": (
+        "c_watch",
+        "c_warn",
+        "c_rebalance",
+        "monitor",
+        "reconcile_eod",
+        "c_data",
+        "c_sleeve",
+        "c_plan",
+    ),
 }
 
 
@@ -126,7 +141,13 @@ def specs_for(system: str, config: AppConfig | None = None) -> tuple[JobSpec, ..
         names.discard("c_watch")
     if config is not None and not config.portfolio.sleeve.enabled:
         names.discard("c_sleeve")
+    if config is not None and not config.telegram.warnings.enabled:
+        names -= {"warn_orders", "c_warn"}
     return tuple(spec for spec in SPECS if spec.name in names)
+
+
+def _before(at: time, minutes: int) -> time:
+    return (datetime.combine(date(2000, 1, 3), at) - timedelta(minutes=minutes)).time()
 
 
 @dataclass(frozen=True)
@@ -199,7 +220,9 @@ class Jobs:
         api = self._anthropic()
         if api is None:
             return None
-        governor = CostGovernor(self.sessions, self.config.budget, exclude=(FABLE_PURPOSE,))
+        governor = CostGovernor(
+            self.sessions, self.config.budget, exclude=(FABLE_PURPOSE, ASK_PURPOSE)
+        )
         return ClaudeClient(api, self.sessions, self.config.budget, governor)
 
     def fable_claude(self) -> ClaudeClient:
@@ -218,11 +241,24 @@ class Jobs:
             raise JobFailed("ANTHROPIC_API_KEY is not set in .env")
         return client
 
+    def _gate(self) -> Any:
+        """X6: the Telegram heads-up before orders (B and C; A's frozen code has none)."""
+        if self.system not in ("B", "C") or not self.config.telegram.warnings.enabled:
+            return None
+        from papertrader.notify.warnings import Gate
+
+        return Gate(self.sessions, self.config.telegram.warnings, now=self.now)
+
     def _engine(self) -> Any:
         from papertrader.trading.engine import TradingEngine
 
         return TradingEngine(
-            self.sessions, self.broker(), self.config, now=self.now, sleep=self.sleep
+            self.sessions,
+            self.broker(),
+            self.config,
+            now=self.now,
+            sleep=self.sleep,
+            gate=self._gate(),
         )
 
     def trading_day(self, day: date) -> TradingDay | None:
@@ -517,6 +553,96 @@ class Jobs:
         return {"exits": sold, "placements": rows,
                 "summary": f"{submitted} order(s) placed" + (f", {len(sold)} exit(s)" if sold else "")}  # fmt: skip
 
+    def job_warn_orders(self) -> dict[str, Any]:
+        """X6: one Telegram message for the open's orders: the judge's sells and today's buys."""
+        from papertrader.notify.ahead import exit_pending, idea_pending
+        from papertrader.notify.reports import latest_daily_decision
+
+        gate, now = self._gate(), self.now()
+        if gate is None:
+            raise JobSkipped("order warnings are switched off")
+        engine = self._engine()
+        day = new_york_date(now)
+        try:
+            equity: float | None = engine.broker.account().equity
+        except Exception:
+            equity = None  # the message then says "shares as the risk rules allow"
+        with self.sessions() as session:
+            items = []
+            decision = latest_daily_decision(session, day)
+            held = {t.ticker: t for t in session.scalars(select(m.Trade).where(
+                m.Trade.status == m.TradeStatus.OPEN, m.Trade.is_test.is_(False)))}  # fmt: skip
+            for item in (decision.payload or {}).get("exits", []) if decision else []:
+                trade = held.get(str(item.get("ticker", "")).upper())
+                if trade is not None:
+                    items.append(
+                        exit_pending(
+                            session,
+                            trade,
+                            "judge",
+                            "judge: " + str(item.get("reason", ""))[:300],
+                            day,
+                        )
+                    )
+            items += [idea_pending(i, equity) for i in engine.tradable_ideas(session, None)]
+        if not items:
+            return {"summary": "nothing to announce"}
+        refs = gate.warn(
+            items, due=at_new_york(day, self.config.schedule.place_orders), early=False
+        )
+        return {"announced": refs, "summary": f"{len(refs)} order(s) announced"}
+
+    def orders_due(self) -> dict[str, Any]:
+        """X6, every minute in market hours (B and C): send the announced orders whose
+        heads-up time has come or that you sent on with Go now. Not recorded as a job run
+        unless it does something."""
+        gate = self._gate()
+        if gate is None:
+            return {}
+        due = gate.due()
+        if not due:
+            return {}
+        now = self.now()
+        day = new_york_date(now)
+        done: dict[str, Any] = {}
+        try:
+            with self.trading_lock:
+                engine = self._engine()
+                for w in (w for w in due if w.ref.startswith("exit:")):
+                    trigger = (
+                        m.ExitTrigger.TIME if w.source == "time" else m.ExitTrigger.THESIS_BREAK
+                    )
+                    done[w.ref] = engine.exit_trade(
+                        int(w.details["trade_id"]), trigger, str(w.details["reason"])
+                    )
+                if any(w.ref.startswith("idea:") for w in due) and now >= at_new_york(
+                    day, self.config.schedule.place_orders
+                ):
+                    done["buys"] = [f"{p.ticker} {p.status}" for p in engine.place_orders()]
+                if self.system == "B" and any(w.ref.startswith("intraday:") for w in due):
+                    from papertrader.b.scanner import place_due
+
+                    done["intraday"] = place_due(self.sessions, self.config, engine, now)
+                if self.system == "C" and any(w.ref.startswith("c:") for w in due) and now >= at_new_york(
+                        day, self.config.portfolio.rebalance_time):  # fmt: skip
+                    from papertrader.c.live import NotReady, rebalance
+
+                    try:
+                        done["rebalance"] = rebalance(
+                            self.sessions, self.config, engine.broker, now, gate
+                        )
+                    except NotReady as exc:
+                        done["rebalance"] = str(exc)
+        except Exception as exc:  # never take the scheduler down; tell you once a day
+            log.exception("sending due orders failed")
+            with self.sessions() as session:
+                job_failed(session, "orders_due", f"{type(exc).__name__}: {exc}", now)
+                session.commit()
+            return {"error": str(exc)}
+        if done:
+            log.info("due orders handled", extra={"system": self.system, "done": _jsonable(done)})
+        return done
+
     def job_monitor(self) -> dict[str, Any]:
         from papertrader.trading.thesis import check_held_positions
 
@@ -655,12 +781,24 @@ class Jobs:
         return self._c(lambda: asyncio.run(plan_week(self.sessions, self.config, self._engine().broker, claude,
                                                      self.now())))  # fmt: skip
 
+    def job_c_warn(self) -> dict[str, Any]:
+        from papertrader.c.live import warn_week
+
+        gate = self._gate()
+        if gate is None:
+            raise JobSkipped("order warnings are switched off")
+        return self._c(
+            lambda: warn_week(self.sessions, self.config, self._engine().broker, gate, self.now())
+        )
+
     def job_c_rebalance(self) -> dict[str, Any]:
         from papertrader.c.live import rebalance
 
         with self.trading_lock:
             return self._c(
-                lambda: rebalance(self.sessions, self.config, self._engine().broker, self.now())
+                lambda: rebalance(
+                    self.sessions, self.config, self._engine().broker, self.now(), self._gate()
+                )
             )
 
     def job_c_watch(self) -> dict[str, Any]:
@@ -674,8 +812,18 @@ class Jobs:
                 watch(session, self._need_claude(), self.config.portfolio.veto, self.now(), held)
             )
             if result is not None and result.severity == "high":
-                queue(session, "alert", messages.alert(f"NEWS WATCH (system C): {result.note}"),
-                      dedup_key=f"c-watch:{new_york_date(self.now())}")  # fmt: skip
+                from papertrader.notify.news import bullets
+
+                news = bullets(session, held, self.now(), per_ticker=2, limit=8)
+                text = f"NEWS WATCH (system C): {result.note}" + (
+                    "\nThe news:\n" + "\n".join(news) if news else ""
+                )
+                queue(
+                    session,
+                    "alert",
+                    messages.alert(text),
+                    dedup_key=f"c-watch:{new_york_date(self.now())}",
+                )
                 session.commit()
         if result is None:
             raise JobSkipped("the news watch did not run")

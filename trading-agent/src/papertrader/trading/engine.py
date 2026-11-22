@@ -18,7 +18,7 @@ import time as clock_time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -35,10 +35,21 @@ from papertrader.trading import control
 from papertrader.trading.broker import Broker, BrokerError, BrokerOrder, TradingDay
 from papertrader.trading.risk import Book, Proposal, check_entry
 
+if TYPE_CHECKING:
+    from papertrader.notify.warnings import Gate
+
 log = logging.getLogger(__name__)
 
 TRADABLE_KINDS = (m.CycleKind.DAILY, m.CycleKind.MANUAL)  # never dry runs
 EXIT_RETRIES = 5
+# X6: sells the system decides itself are announced first. Kill-switch and manual exits are not.
+GATED_TRIGGERS = (m.ExitTrigger.TIME, m.ExitTrigger.THESIS_BREAK)
+
+
+def _source(trigger: m.ExitTrigger, reason: str) -> str:
+    if trigger == m.ExitTrigger.TIME:
+        return "time"
+    return "judge" if reason.startswith("judge:") else "thesis"
 
 
 class TradingRefused(RuntimeError):
@@ -105,6 +116,7 @@ class TradingEngine:
         *,
         now: Callable[[], datetime] | None = None,
         sleep: Callable[[float], None] = clock_time.sleep,
+        gate: Gate | None = None,
     ) -> None:
         self.sessions = sessions
         self.broker = broker
@@ -112,6 +124,8 @@ class TradingEngine:
         self.now: Callable[[], datetime] = now or (lambda: db_types.utcnow())
         self.sleep = sleep
         self.benchmark = config.universe.benchmark
+        # X6 (systems B and C): a Telegram heads-up before each order, with Skip / Go now.
+        self.gate = gate
 
     # ------------------------------------------------------------------ pause / resume
 
@@ -231,9 +245,13 @@ class TradingEngine:
         return list(session.scalars(query))
 
     def place_orders(
-        self, decision_id: int | None = None, *, qty_overrides: Mapping[int, int] | None = None
-    ) -> list[Placement]:
-        """Turn approved ideas into bracket orders, within every risk limit."""
+        self, decision_id: int | None = None, *, qty_overrides: Mapping[int, int] | None = None,
+        gated: bool = True,
+    ) -> list[Placement]:  # fmt: skip
+        """Turn approved ideas into bracket orders, within every risk limit.
+
+        With a gate (X6), ideas you skipped on Telegram are dropped, and ideas whose
+        heads-up time has not come yet wait for the next run."""
         if (state := self.paused()) is not None:
             raise TradingRefused(f"trading is paused ({state.get('reason', 'no reason given')})")
         self._check_market()
@@ -243,11 +261,29 @@ class TradingEngine:
 
         trading, risk = self.config.trading, self.config.risk
         results: list[Placement] = []
+        skipped_ids, waiting_ids = (
+            self._gate_ideas(decision_id, account.equity) if gated else (set(), set())
+        )
+        sent: list[str] = []
         with self.sessions() as session:
             ideas = self.tradable_ideas(session, decision_id)
             prices = self.broker.latest_prices(sorted({i.ticker for i in ideas})) if ideas else {}
             book = self._book(session, prices)
             for idea in ideas:
+                if idea.id in skipped_ids:
+                    idea.status, idea.status_reason = (
+                        m.IdeaStatus.EXPIRED,
+                        "skipped by you on Telegram",
+                    )
+                    results.append(
+                        Placement(idea.ticker, idea.id, "skipped", "skipped by you on Telegram")
+                    )
+                    continue
+                if idea.id in waiting_ids:
+                    results.append(
+                        Placement(idea.ticker, idea.id, "waiting", "waiting for its heads-up time")
+                    )
+                    continue
                 client_id = entry_client_id(idea.id)
                 if session.scalar(select(m.Order.id).where(m.Order.client_order_id == client_id)):
                     idea.status = m.IdeaStatus.SUBMITTED
@@ -280,13 +316,29 @@ class TradingEngine:
                     self._record_order(session, leg, leg=self._leg_kind(leg), idea_id=idea.id,
                                        trade_id=None, parent_id=parent.id)  # fmt: skip
                 idea.status, idea.status_reason = m.IdeaStatus.SUBMITTED, None
+                sent.append(f"idea:{idea.id}")
                 book.add(idea.ticker, verdict.notional)
                 results.append(Placement(idea.ticker, idea.id, "submitted", "bracket order placed",
                                          verdict.qty, verdict.limit_price))  # fmt: skip
                 log.info("order placed", extra={"ticker": idea.ticker, "qty": verdict.qty,
                                                 "limit": verdict.limit_price})  # fmt: skip
             session.commit()
+        if self.gate is not None:
+            self.gate.mark_sent(sent)
         return results
+
+    def _gate_ideas(self, decision_id: int | None, equity: float) -> tuple[set[int], set[int]]:
+        """(skipped idea ids, waiting idea ids). Ideas never announced are announced now."""
+        if self.gate is None or not self.gate.enabled:
+            return set(), set()
+        from papertrader.notify.ahead import idea_pending
+
+        with self.sessions() as session:
+            items = [idea_pending(i, equity) for i in self.tradable_ideas(session, decision_id)]
+        if not items:
+            return set(), set()
+        _ready, skipped, waiting = self.gate.decide(items, early=False)
+        return {int(r.split(":")[1]) for r in skipped}, {int(r.split(":")[1]) for r in waiting}
 
     # ------------------------------------------------------------------ syncing fills
 
@@ -495,8 +547,49 @@ class TradingEngine:
 
     # ------------------------------------------------------------------ exits
 
-    def exit_trade(self, trade_id: int, trigger: m.ExitTrigger, reason: str) -> str:
-        """Close a position now with a market order, after removing its bracket legs."""
+    def exit_trade(
+        self, trade_id: int, trigger: m.ExitTrigger, reason: str, *, gated: bool = True
+    ) -> str:
+        """Close a position with a market order, after removing its bracket legs.
+
+        With a gate (X6), time-limit and thesis sells are announced first and sent once
+        their heads-up time has come (or after Go now); a skip holds for the rest of the day."""
+        if gated and self.gate is not None and self.gate.enabled and trigger in GATED_TRIGGERS:
+            from papertrader.notify.ahead import exit_pending
+
+            with self.sessions() as session:
+                trade = session.get(m.Trade, trade_id)
+                if trade is None or trade.status == m.TradeStatus.CLOSED:
+                    return "already closed"
+                item = exit_pending(
+                    session, trade, _source(trigger, reason), reason, new_york_date(self.now())
+                )
+            _ready, skipped, waiting = self.gate.decide([item])
+            if item.ref in skipped:
+                self._note_skip(trade_id, trigger, reason)
+                return "skipped by you on Telegram (until tomorrow)"
+            if item.ref in waiting:
+                return "announced; waiting for its heads-up time"
+            outcome = self._exit_now(trade_id, trigger, reason)
+            if outcome == "exit order placed":
+                self.gate.mark_sent([item.ref])
+            return outcome
+        return self._exit_now(trade_id, trigger, reason)
+
+    def _note_skip(self, trade_id: int, trigger: m.ExitTrigger, reason: str) -> None:
+        """Record the skip once a day per position and reason type."""
+        with self.sessions() as session:
+            note = f"skipped by you on Telegram: {reason}"[:2000]
+            if not session.scalar(select(m.ExitSignal.id).where(
+                    m.ExitSignal.trade_id == trade_id, m.ExitSignal.trigger == trigger,
+                    m.ExitSignal.acted_on.is_(False), m.ExitSignal.reason.startswith("skipped by you on Telegram"),
+                    m.ExitSignal.created_at >= _day_start(new_york_date(self.now()))).limit(1)):  # fmt: skip
+                trade = session.get(m.Trade, trade_id)
+                session.add(m.ExitSignal(trade_id=trade_id, ticker=trade.ticker if trade else "?", trigger=trigger,
+                                         reason=note, acted_on=False))  # fmt: skip
+                session.commit()
+
+    def _exit_now(self, trade_id: int, trigger: m.ExitTrigger, reason: str) -> str:
         with self.sessions() as session:
             trade = session.get(m.Trade, trade_id)
             if trade is None or trade.status == m.TradeStatus.CLOSED:
@@ -570,10 +663,16 @@ class TradingEngine:
                 )
             ).all()  # fmt: skip
         stopped = []
+        reason = "the planned holding period is over"
+        if due and self.gate is not None and self.gate.enabled:  # one heads-up for all of them
+            from papertrader.notify.ahead import exit_pending
+
+            with self.sessions() as session:
+                items = [exit_pending(session, t, "time", reason, new_york_date(now))
+                         for t in (session.get(m.Trade, trade_id) for trade_id, _t, _e in due) if t is not None]  # fmt: skip
+            self.gate.warn(items)
         for trade_id, ticker, _ends in due:
-            outcome = self.exit_trade(
-                trade_id, m.ExitTrigger.TIME, "the planned holding period is over"
-            )
+            outcome = self.exit_trade(trade_id, m.ExitTrigger.TIME, reason)
             if outcome == "exit order placed":
                 stopped.append(ticker)
         return stopped

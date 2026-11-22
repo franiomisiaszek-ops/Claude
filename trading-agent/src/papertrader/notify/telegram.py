@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -26,6 +27,7 @@ install_url_redaction()
 
 API = "https://api.telegram.org"
 MAX_LENGTH = 4000  # Telegram's limit is 4096 characters per message
+Buttons = list[list[dict[str, str]]]  # rows of inline buttons: {"text": ..., "callback_data": ...}
 
 
 class TelegramError(RuntimeError):
@@ -91,21 +93,42 @@ class TelegramClient:
         raise TelegramError(f"Telegram refused: {description}", retry_after=retry_after,
                             permanent=status in (400, 401, 403, 404))  # fmt: skip
 
-    def send(self, chat_id: str, text: str) -> list[int]:
+    def send(self, chat_id: str, text: str, buttons: Buttons | None = None) -> list[int]:
+        """Send the whole text: long texts go as several messages, split at line breaks
+        (never cut short). Buttons, if any, sit under the last part."""
+        parts = split_message(text, MAX_LENGTH - 40)
         ids = []
-        for part in split_message(text):
-            result = self._call("sendMessage", {
-                "chat_id": chat_id, "text": to_html(part), "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            })  # fmt: skip
+        for number, part in enumerate(parts, start=1):
+            body = (
+                to_html(part)
+                if number == 1
+                else f"<i>(part {number} of {len(parts)})</i>\n{html.escape(part)}"
+            )
+            payload: dict[str, Any] = {"chat_id": chat_id, "text": body, "parse_mode": "HTML",
+                                       "disable_web_page_preview": True}  # fmt: skip
+            if buttons and number == len(parts):
+                payload["reply_markup"] = {"inline_keyboard": buttons}
+            result = self._call("sendMessage", payload)
             ids.append(int(result["message_id"]))
         return ids
 
     def updates(self, offset: int | None, timeout: int) -> list[dict[str, Any]]:
-        payload: dict[str, Any] = {"timeout": timeout, "allowed_updates": ["message"]}
+        payload: dict[str, Any] = {
+            "timeout": timeout,
+            "allowed_updates": ["message", "callback_query"],
+        }
         if offset is not None:
             payload["offset"] = offset
         return list(self._call("getUpdates", payload, timeout=timeout + 15))
+
+    def answer_button(self, callback_id: str, text: str) -> None:
+        """The short note Telegram shows after a button tap."""
+        self._call("answerCallbackQuery", {"callback_query_id": callback_id, "text": text[:190]})
+
+    def set_buttons(self, chat_id: str, message_id: int, buttons: Buttons | None) -> None:
+        """Replace (or with None remove) the buttons under a message already sent."""
+        self._call("editMessageReplyMarkup", {"chat_id": chat_id, "message_id": message_id,
+                                              "reply_markup": {"inline_keyboard": buttons or []}})  # fmt: skip
 
     def me(self) -> dict[str, Any]:
         return dict(self._call("getMe", {}))
@@ -134,9 +157,17 @@ def _setup_problem(exc: TelegramError) -> bool:
 def flush_outbox(
     sessions: sessionmaker[Session], client: TelegramClient, chat_id: str, cfg: TelegramConfig,
     *, now: datetime | None = None, limit: int = 30, prefix: str = "",
+    hold: Callable[[Notification], bool] | None = None,
+    buttons: Callable[[Session, Notification], Buttons | None] | None = None,
+    sent: Callable[[Session, Notification, list[int]], None] | None = None,
+    link: Callable[[Notification], str | None] | None = None,
 ) -> FlushReport:  # fmt: skip
     """Send pending messages, oldest first. A temporary problem stops the run (so the
-    order is kept); a permanent one marks that message failed and moves on."""
+    order is kept); a permanent one marks that message failed and moves on.
+
+    The hub's extras (X6): `hold` keeps a message for later (quiet hours), `buttons`
+    adds the Skip / Go now buttons, `sent` records where they went, `link` ends a long
+    report with a link to the matching web app page."""
     report = FlushReport()
     now = now or utcnow()
     oldest = now - timedelta(hours=cfg.max_age_hours)
@@ -146,12 +177,20 @@ def flush_outbox(
             .order_by(Notification.id).limit(limit)
         ).all()  # fmt: skip
         for row in rows:
+            if hold is not None and hold(row):
+                continue  # stays queued until the quiet hours end
             if row.created_at < oldest:
                 row.status, row.error = NotificationStatus.FAILED, "too old to send"
                 report.dropped += 1
                 continue
+            text = prefix + row.text
+            url = link(row) if link is not None else None
+            if url:
+                text += f"\n\nThe whole report in the app: {url}"
             try:
-                ids = client.send(chat_id, prefix + row.text)
+                ids = client.send(
+                    chat_id, text, buttons(session, row) if buttons is not None else None
+                )
             except TelegramError as exc:
                 if _setup_problem(exc):
                     # Not this message's fault: keep everything queued and stop.
@@ -169,6 +208,8 @@ def flush_outbox(
             row.telegram_message_id = ",".join(map(str, ids))[:32]
             row.error = None
             report.sent += 1
+            if sent is not None:
+                sent(session, row, ids)
         session.commit()
     return report
 

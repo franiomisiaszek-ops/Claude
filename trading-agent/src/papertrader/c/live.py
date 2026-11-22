@@ -31,7 +31,7 @@ from papertrader.c.review import review
 from papertrader.c.strategy import Target, drawdown_state, rebalance_orders, target_weights
 from papertrader.config import AppConfig, PortfolioConfig
 from papertrader.db.state import get_state, set_state
-from papertrader.ingest.timeutil import new_york_date
+from papertrader.ingest.timeutil import at_new_york, new_york_date
 from papertrader.llm.client import ClaudeClient
 from papertrader.notify.messages import alert, money
 from papertrader.notify.outbox import queue
@@ -192,9 +192,51 @@ def review_effect(session: Session, cfg: PortfolioConfig) -> dict[str, Any]:
 # --------------------------------------------------------------------------- orders
 
 
+def order_pending(plan: Plan, order: Any, cfg: PortfolioConfig) -> Any:
+    """The heads-up for one weekly order (X6)."""
+    from papertrader.notify.warnings import Pending
+
+    reason = str(plan.reasons.get(order.ticker, "the T-bill fund (cash)" if order.ticker == cfg.cash_fund
+                                  else "no longer chosen")).removeprefix("in: ").removeprefix("out: ")  # fmt: skip
+    review = plan.review.get(order.ticker) if isinstance(plan.review, dict) else None
+    if order.side == "buy":
+        against = (f"Claude's review: {review['reason']}" if review else
+                   "trends can turn quickly; the 20% emergency stop and the Friday check limit the damage")  # fmt: skip
+    else:
+        against = "it may keep rising after the sale; the rules sell only when it falls out of the top or its trend breaks"
+    return Pending(ref=f"c:{plan.id}:{order.ticker}:{order.side}", side=order.side.upper(), ticker=order.ticker,
+                   source="rebalance", shares=order.qty, price=f"limit {money(order.limit)}",
+                   hold="as long as its trend lasts (checked every Friday)",
+                   reasons=(reason, f"weight {order.weight_now:.0%} now, target {order.weight_target:.0%}"),
+                   against=against, details={"plan_id": plan.id})  # fmt: skip
+
+
+def warn_week(sessions: sessionmaker[Session], config: AppConfig, broker: PortfolioBroker, gate: Any,
+              now: datetime) -> dict[str, Any]:  # fmt: skip
+    """X6: announce this week's orders a few minutes before they go in."""
+    cfg = config.portfolio
+    day = new_york_date(now)
+    with sessions() as session:
+        plan = session.scalars(select(Plan).where(Plan.status == "planned", Plan.trade_day <= day)
+                               .order_by(Plan.signal_day.desc()).limit(1)).first()  # fmt: skip
+        if plan is None:
+            raise NotReady("no plan is waiting for its orders")
+        session.expunge(plan)
+    account = broker.account()
+    qty, _ = holdings(broker)
+    prices = broker.latest_prices(sorted(set(plan.targets) | set(qty)))
+    orders = rebalance_orders(plan.targets, qty, prices, account.equity, cfg)
+    if not orders:
+        return {"orders": 0, "summary": "nothing to announce: no fund drifted enough"}
+    refs = gate.warn([order_pending(plan, o, cfg) for o in orders], due=at_new_york(day, cfg.rebalance_time),
+                     early=False)  # fmt: skip
+    return {"orders": len(refs), "summary": f"{len(refs)} order(s) announced"}
+
+
 def rebalance(
-    sessions: sessionmaker[Session], config: AppConfig, broker: PortfolioBroker, now: datetime
-) -> dict[str, Any]:
+    sessions: sessionmaker[Session], config: AppConfig, broker: PortfolioBroker, now: datetime,
+    gate: Any = None,
+) -> dict[str, Any]:  # fmt: skip
     cfg = config.portfolio
     day = new_york_date(now)
     with sessions() as session:
@@ -219,6 +261,19 @@ def rebalance(
         qty, _ = holdings(broker)
         prices = broker.latest_prices(sorted(set(plan.targets) | set(qty)))
         orders = rebalance_orders(plan.targets, qty, prices, account.equity, cfg)
+        if gate is not None and gate.enabled and orders:  # X6: the heads-up comes first
+            items = {f"c:{plan.id}:{o.ticker}:{o.side}": o for o in orders}
+            _ready, skipped, waiting = gate.decide(
+                [order_pending(plan, o, cfg) for o in orders], early=False
+            )
+            if waiting:
+                session.rollback()
+                return {"orders": 0, "waiting": len(waiting),
+                        "summary": f"{len(waiting)} order(s) announced; they go in when the heads-up time comes"}  # fmt: skip
+            if skipped:
+                names = ", ".join(f"{items[r].side} {items[r].ticker}" for r in sorted(skipped))
+                plan.note = (plan.note + f" Skipped by you: {names}.").strip()
+                orders = [o for ref, o in items.items() if ref not in skipped]
         plan.attempts += 1
         if not orders:
             plan.status = "done"
@@ -257,6 +312,8 @@ def rebalance(
             queue(session, "c_orders", "ORDERS PLACED (weekly rebalance): " + ", ".join(placed),
                   dedup_key=f"c-orders:{plan.id}:{plan.attempts}")  # fmt: skip
         session.commit()
+        if gate is not None:
+            gate.mark_sent(f"c:{plan.id}:{o.ticker}:{o.side}" for o in orders)
         return {"orders": len(placed), "summary": f"{len(placed)} order(s) placed"}
 
 

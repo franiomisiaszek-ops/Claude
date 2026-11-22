@@ -11,7 +11,7 @@ fails loudly with a readable message instead of misbehaving later.
 
 from __future__ import annotations
 
-from datetime import time
+from datetime import datetime, time
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self
@@ -322,6 +322,43 @@ class IngestConfig(_Strict):
     managers_13f: tuple[Manager13F, ...] = ()
 
 
+class WarningsConfig(_Strict):
+    """X6. A heads-up before every order a system sends itself, with Skip and Go now.
+
+    Not used by system A's frozen code: the hub writes A's warnings (information only).
+    """
+
+    enabled: bool = True
+    minutes: int = Field(default=3, ge=1, le=15)  # how long before the order
+    near_pct: float = Field(default=0.005, gt=0, le=0.05)  # warn this close to a stop or target
+
+
+class QuietHours(_Strict):
+    """X6. No routine messages at night (your time); alerts and order warnings always go."""
+
+    enabled: bool = True
+    start: time = time(23, 0)
+    end: time = time(7, 0)
+    timezone: str = "Europe/Warsaw"
+    always: list[str] = Field(
+        default_factory=lambda: ["alert", "order_warning", "order_info", "price_alert"]
+    )
+
+    @field_validator("timezone")
+    @classmethod
+    def _valid_timezone(cls, value: str) -> str:
+        ZoneInfo(value)
+        return value
+
+    def quiet(self, moment: datetime) -> bool:
+        if not self.enabled or self.start == self.end:
+            return False
+        local = moment.astimezone(ZoneInfo(self.timezone)).time()
+        if self.start < self.end:
+            return self.start <= local < self.end
+        return local >= self.start or local < self.end
+
+
 class TelegramConfig(_Strict):
     enabled: bool = True
     # Messages that could not be sent within this many hours are dropped, not sent late.
@@ -330,6 +367,12 @@ class TelegramConfig(_Strict):
     poll_timeout_seconds: int = Field(default=25, ge=1, le=50)
     max_attempts: int = Field(default=5, ge=1)
     brief_max_trades: int = Field(default=5, ge=1, le=10)
+    warnings: WarningsConfig = WarningsConfig()  # X6
+    quiet_hours: QuietHours = QuietHours()  # X6 (used by the hub)
+    ask_model: str = "claude-haiku-5-5"  # X6: /ask answers
+    ask_monthly_usd: float = Field(
+        default=2.0, ge=0
+    )  # X6: /ask's own budget, outside every system's
 
 
 class LearningConfig(_Strict):
@@ -693,6 +736,17 @@ class WebConfig(_Strict):
     allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1", "*.ts.net"])
     lockout_after: int = Field(default=5, ge=3)  # wrong passwords before logins are locked
     lockout_max_minutes: int = Field(default=60, ge=1)  # the lock doubles up to this
+    # The app's address on your Tailscale network, e.g. "https://my-pc.tail1234.ts.net"
+    # (optional): long Telegram reports then end with a link to the matching page.
+    public_url: str = ""
+
+    @field_validator("public_url")
+    @classmethod
+    def _plain_https(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        if value and not value.startswith("https://"):
+            raise ValueError("web.public_url must start with https://")
+        return value
 
 
 class AppConfig(_Strict):

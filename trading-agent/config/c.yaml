@@ -116,6 +116,12 @@ telegram:
   poll_timeout_seconds: 25   # how long the bot waits for a command per request
   max_attempts: 5
   brief_max_trades: 5
+  # X6. A heads-up on Telegram before every order this system sends itself, with Skip
+  # and Go now. No answer = the order goes ahead.
+  warnings:
+    enabled: true
+    minutes: 3            # how long before the order
+    near_pct: 0.005       # (used by the hub) warn within 0.5% of a stop or target
 
 # Learning loop: scoring past agent calls, agent weights, weekly lessons.
 learning:

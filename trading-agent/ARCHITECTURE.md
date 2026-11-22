@@ -20,7 +20,7 @@ Sat    learning    re-weight agents, retrain model, weekly report
 All times are New York time on trading days. Each step reads from and writes to the
 database, so steps are independent: one can fail and be re-run without redoing the others.
 
-## What exists today (Phases 1-8, experiment X1-X5)
+## What exists today (Phases 1-8, experiment X1-X6)
 
 | Piece | File | What it does |
 |---|---|---|
@@ -712,6 +712,19 @@ confirmation; host names other than localhost and `*.ts.net` are refused (no DNS
 rebinding); pages use connections opened with `default_transaction_read_only` (SQLite:
 `query_only`). The service worker keeps only the style, script, icons and an offline page,
 never a page with data.
+
+## The Telegram upgrade (X6)
+
+| Piece | File | What it does |
+|---|---|---|
+| Heads-ups | `notify/warnings.py` | `order_warnings` (B and C only, own schema): one row per announced order with a stable reference (`idea:12`, `exit:7:time:<day>`, `intraday:5`, `c:3:GLD:buy`), one Telegram message per group; `Gate.warn` / `decide` / `due` / `mark_sent`; the buttons (`keyboard`) and the taps (`tap`) |
+| Order texts | `notify/ahead.py` | The heads-up for a buy at the open or a sell; A's information-only heads-ups and the near-stop/target warnings, written by the hub |
+| Where orders wait | `trading/engine.py` (`place_orders`, `exit_trade`, `time_stops`), `b/scanner.py` (`place_due`), `c/live.py` (`warn_week`, `rebalance`) | Skipped orders are not sent; orders whose time has not come wait. Kill-switch, manual and drawdown exits are never gated |
+| Schedule | jobs `warn_orders` (B), `c_warn` (C) at 09:32; `orders_due` every minute in market hours (B, C; not recorded unless it acts); the hub's `a_ahead` at A's 09:32 and the checks after each live snapshot | Nothing sleeps while waiting |
+| Hub | `hub.py` | Buttons on order warnings, taps (only from your chat; the data names the system), removing stale buttons, quiet hours, app links for long reports, `/ask` |
+| Sending | `notify/telegram.py` | Long texts split at line breaks ("part 2 of 3"), never cut; buttons under the last part |
+| News | `notify/news.py` | Bullets: headline, why it matters (the citing agent's claim, else the stored labels), source, plain web link only |
+| /ask | `notify/ask.py` | A compact summary of the systems' data and a Haiku answer from it only; purpose "ask" in B's spending, outside B's budget and the comparison |
 
 ## Design rules
 

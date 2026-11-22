@@ -473,16 +473,40 @@ class Scanner:
             confidence=round(out.confidence, 3), expected_hold_minutes=hold, time_stop_at=time_stop,
             place_after=place_after, why=clip(out.why, 600), invalidation=clip(out.invalidation, 300),
         )  # fmt: skip
+        from papertrader.notify.warnings import Gate
+
+        gate = Gate(self.sessions, self.config.telegram.warnings, now=lambda: now)
+        with_buttons = live and gate.enabled  # X6: a heads-up with Skip / Go now
         with self.sessions() as session:
             session.add(plan)
             session.flush()
-            queue(
-                session,
-                "intraday",
-                announce(plan, self.equity()),
-                dedup_key=f"intraday-plan:{plan.id}",
-            )
+            if not with_buttons:
+                queue(
+                    session,
+                    "intraday",
+                    announce(plan, self.equity()),
+                    dedup_key=f"intraday-plan:{plan.id}",
+                )
             session.commit()
+        if with_buttons:
+            gate.warn([intraday_pending(plan, self.equity())], due=place_after, early=True)
+
+
+def intraday_pending(plan: IntradayPlan, equity: float | None) -> Any:
+    """The heads-up for a live intraday plan (X6), with Skip and Go now."""
+    from papertrader.notify.ahead import sentences
+    from papertrader.notify.warnings import Pending
+
+    shares = float(math.floor(equity * plan.size_pct / plan.entry_high)) if equity else None
+    return Pending(ref=f"intraday:{plan.id}", side="BUY", ticker=plan.ticker, source="intraday", shares=shares or None,
+                   price=f"limit {money(plan.entry_high)} (zone {money(plan.entry_low)}-{money(plan.entry_high)})",
+                   target=plan.target_price, stop=plan.stop_price,
+                   hold=f"{held_text(plan.expected_hold_minutes)}, sold by "
+                        f"{plan.time_stop_at.astimezone(NEW_YORK):%a %H:%M} at the latest",
+                   confidence=plan.confidence,
+                   reasons=(*sentences(plan.why, 3), f"found by the {RULE_WORDS[plan.rule]} rule"),
+                   against=f"wrong if {plan.invalidation}" if plan.invalidation else "",
+                   details={"plan_id": plan.id})  # fmt: skip
 
 
 def announce(plan: IntradayPlan, equity: float | None) -> str:
@@ -540,6 +564,13 @@ def skip(sessions: sessionmaker[Session], ticker: str, now: datetime) -> str:
             return f"Too late for {ticker}: the plan is already {plan.status}."
         plan.status = "skipped"
         plan.note = f"skipped by you at {now.astimezone(NEW_YORK):%H:%M}"
+        from papertrader.notify.warnings import GO, SKIPPED, WAITING, OrderWarning
+
+        warning = session.scalar(
+            select(OrderWarning).where(OrderWarning.ref == f"intraday:{plan.id}")
+        )
+        if warning is not None and warning.status in (WAITING, GO):  # its Telegram buttons go away
+            warning.status, warning.decided_at, warning.decided_by = SKIPPED, now, "you"
         session.commit()
         return f"Skipped {ticker}: it will not be bought."
 
@@ -548,18 +579,30 @@ def place_due(
     sessions: sessionmaker[Session], config: AppConfig, engine: Any, now: datetime
 ) -> list[str]:
     """Place the planned trades whose /skip window is over (live mode), within every limit."""
+    from papertrader.notify.warnings import SKIPPED
     from papertrader.trading.engine import TradingRefused
 
     cfg = config.decision.intraday
     broker = engine.broker
+    gate = getattr(engine, "gate", None)
     done: list[str] = []
+    go_now = (
+        {int(w.ref.split(":")[1]) for w in gate.due("intraday:")} if gate is not None else set()
+    )
     with sessions() as session:
-        due = [p.id for p in session.scalars(
-            select(IntradayPlan).where(IntradayPlan.status == "planned", IntradayPlan.place_after <= now))]  # fmt: skip
+        due = [p.id for p in session.scalars(select(IntradayPlan).where(IntradayPlan.status == "planned"))
+               if p.place_after <= now or p.id in go_now]  # fmt: skip
+    warnings = gate.rows(f"intraday:{i}" for i in due) if gate is not None else {}
     for plan_id in due:
         with sessions() as session:
             plan = session.get(IntradayPlan, plan_id)
             assert plan is not None
+            warning = warnings.get(f"intraday:{plan_id}")
+            if warning is not None and warning.status == SKIPPED:
+                plan.status, plan.note = "skipped", "skipped by you on Telegram"
+                session.commit()
+                done.append(f"{plan.ticker}: skipped by you")
+                continue
             problem: str | None = None
             placed_today = session.scalar(select(func.count(IntradayPlan.id)).where(
                 IntradayPlan.day == plan.day, IntradayPlan.status.in_(("placed", "done")))) or 0  # fmt: skip
@@ -606,7 +649,7 @@ def place_due(
             plan.idea_id, decision_id = idea.id, decision.id
             session.commit()
         try:
-            results = engine.place_orders(decision_id)
+            results = engine.place_orders(decision_id, gated=False)  # its own heads-up came first
             outcome = results[0] if results else None
         except TradingRefused as exc:
             outcome = None
@@ -617,6 +660,8 @@ def place_due(
             if outcome is not None and outcome.status == "submitted":
                 plan.status, plan.qty = "placed", outcome.qty
                 done.append(f"{plan.ticker}: placed")
+                if gate is not None:
+                    gate.mark_sent([f"intraday:{plan_id}"])
             else:
                 reason = outcome.detail if outcome is not None else refused
                 plan.status, plan.note = "refused", reason

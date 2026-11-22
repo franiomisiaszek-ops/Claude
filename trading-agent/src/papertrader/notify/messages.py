@@ -28,7 +28,7 @@ def trade_executed(*, side: str, qty: float, ticker: str, price: float, confiden
     parts = [f"{verb} {qty:g} {ticker} @ {money(price)}"]
     if confidence is not None:
         parts.append(f"conf {confidence:.0%}")
-    parts.append(reason[:160])
+    parts.append(reason)  # X6: never cut short (long messages are split instead)
     text = " · ".join(parts)
     return f"[TEST] {text}" if test else text
 
@@ -37,7 +37,7 @@ def sell_signal(*, ticker: str, trigger: str, reason: str) -> str:
     words = {"target": "take-profit reached", "stop": "stop-loss hit", "time": "holding period over",
              "thesis_break": "thesis broken", "kill_switch": "daily loss limit",
              "manual": "closed by hand"}  # fmt: skip
-    return f"SELL {ticker} · {words.get(trigger, trigger)} · {reason[:200]}"
+    return f"SELL {ticker} · {words.get(trigger, trigger)} · {reason}"
 
 
 def trade_closed(*, ticker: str, exit_price: float, pnl_usd: float, pnl_pct: float,

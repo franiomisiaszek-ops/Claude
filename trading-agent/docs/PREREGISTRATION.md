@@ -109,4 +109,4 @@ is recommended off. Agents are handled by switch 4 (pruning).
 
 | Date | Change | Why | Effect on the test |
 |---|---|---|---|
-| | | | |
+| 2026-11-22 | Telegram heads-ups with a Skip button for B's and C's orders (phase X6); A has none | So you can stop an order in an emergency | Decided before the start. A skipped order counts as part of that system's result; every skip is recorded (`order_warnings`). Skips are meant for emergencies only |

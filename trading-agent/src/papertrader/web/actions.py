@@ -31,11 +31,13 @@ AUDIT_FILE = "web_audit.jsonl"
 
 @dataclass(frozen=True)
 class Action:
-    kind: str  # pause | resume | skip
+    kind: str  # pause | resume | skip | skiporder
     system: str
-    ticker: str = ""
+    ticker: str = ""  # for skiporder: the heads-up's number
 
     def describe(self) -> str:
+        if self.kind == "skiporder":
+            return f"Skip system {self.system}'s announced order (heads-up #{self.ticker}): it will not be sent."
         if self.kind == "pause":
             return f"Pause system {self.system}: no new orders; open positions keep their stops and targets."
         if self.kind == "resume":
@@ -54,10 +56,16 @@ class ActionError(ValueError):
 
 def parse(kind: str, system: str, ticker: str = "") -> Action:
     kind, system, ticker = kind.strip().lower(), system.strip().upper(), ticker.strip().upper()
-    if kind not in ("pause", "resume", "skip"):
+    if kind not in ("pause", "resume", "skip", "skiporder"):
         raise ActionError("unknown action")
     if system not in SYSTEMS:
         raise ActionError("unknown system")
+    if kind == "skiporder":
+        if system not in ("B", "C"):
+            raise ActionError("only system B's and C's orders can be skipped (A is frozen)")
+        if not ticker.isdigit() or len(ticker) > 9:
+            raise ActionError("that is not an order number")
+        return Action(kind, system, ticker)
     if kind == "skip":
         if system != "B":
             raise ActionError("only system B's intraday trades can be skipped")
@@ -79,6 +87,12 @@ def run(database_url: str, action: Action, now: datetime) -> str:
         elif action.kind == "resume":
             control.resume(sessions, now)
             message = f"System {action.system} resumed from the web app (kill switch cleared)."
+        elif action.kind == "skiporder":
+            from papertrader.notify.warnings import tap
+
+            with sessions() as session:
+                message, _key = tap(session, f"ow:{action.ticker}:skip", now)
+                session.commit()
         else:
             from papertrader.b.scanner import skip
 
