@@ -20,7 +20,7 @@ import threading
 import time as clock
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -32,7 +32,6 @@ from starlette.middleware import Middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request
 from starlette.responses import (
-    FileResponse,
     JSONResponse,
     PlainTextResponse,
     RedirectResponse,
@@ -46,6 +45,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from papertrader import __version__
 from papertrader.config import AppConfig, Settings, load_config
 from papertrader.db.types import utcnow
+from papertrader.ingest.timeutil import NEW_YORK
 from papertrader.safety import ALPACA_PAPER_BASE_URL
 from papertrader.web import actions, auth
 from papertrader.web import data as d
@@ -102,6 +102,7 @@ class SecurityHeaders:
             await self.app(scope, receive, send)
             return
         static = str(scope.get("path", "")).startswith("/static/")
+        versioned = static and b"v=" in scope.get("query_string", b"")
 
         async def wrapped(message: Message) -> None:
             if message["type"] == "http.response.start":
@@ -109,9 +110,9 @@ class SecurityHeaders:
                     h for h in message.get("headers", []) if h[0].lower() != b"cache-control"
                 ]
                 headers += HEADERS
-                headers.append(
-                    (b"cache-control", b"public, max-age=3600" if static else b"no-store")
-                )
+                cache = (b"public, max-age=31536000, immutable" if versioned else
+                         b"public, max-age=3600" if static else b"no-store")  # fmt: skip
+                headers.append((b"cache-control", cache))
                 message["headers"] = headers
             await send(message)
 
@@ -163,16 +164,26 @@ def _templates() -> Jinja2Templates:
                       lstrip_blocks=True)  # fmt: skip
     env.filters.update(money=money, pct=pct, num=num, signed_money=signed_money, cls=sign_class)
     env.globals.update(TITLES=d.TITLES, TABS=TABS, MORE=MORE, version=__version__, paper=ALPACA_PAPER_BASE_URL,
-                       SLOTS={"A": 0, "B": 1, "C": 2, "SPY": 3}, asset_v=_asset_version())  # fmt: skip
+                       SLOTS={"A": 0, "B": 1, "C": 2, "SPY": 3}, asset_v=ASSET_V)  # fmt: skip
     return Jinja2Templates(env=env)
 
 
 def _asset_version() -> str:
-    """Changes whenever the style or script changes, so phones fetch the new one."""
+    """Changes whenever the style, script or service worker changes, so phones fetch the new one."""
     digest = hashlib.sha256()
-    for name in ("app.css", "app.js"):
+    for name in ("app.css", "app.js", "sw.js"):
         digest.update((STATIC / name).read_bytes())
     return digest.hexdigest()[:10]
+
+
+ASSET_V = _asset_version()
+SW_JS = (STATIC / "sw.js").read_text(encoding="utf-8").replace("__ASSET_V__", ASSET_V)
+
+
+def market_hours(now: datetime) -> bool:
+    """New York 09:30-16:00 on weekdays (holidays aside): when live numbers change."""
+    local = now.astimezone(NEW_YORK)
+    return local.weekday() < 5 and time(9, 25) <= local.time() <= time(16, 5)
 
 
 # --------------------------------------------------------------------------- formatting
@@ -288,7 +299,16 @@ def create_app(settings: Settings | None = None, config: AppConfig | None = None
                 import logging
 
                 logging.getLogger(__name__).exception("web page failed", extra={"page": tab})
-            return render(request, template, {"tab": tab, "views": views, **context}, token)
+            # Stay logged in while you use the app: a session older than a day is renewed.
+            renew = state.now().timestamp() - int(token.split(".")[0]) > 86400
+            record = auth.load(state.auth_file) if renew else None
+            if record is not None:
+                token = auth.make_session(record, state.now(), state.config.web.session_days)
+            response = render(request, template, {"tab": tab, "views": views, **context}, token)
+            if record is not None:
+                response.set_cookie(auth.COOKIE, token, max_age=state.config.web.session_days * 86400, path="/",
+                                    secure=True, httponly=True, samesite="lax")  # fmt: skip
+            return response
 
         return endpoint
 
@@ -302,7 +322,10 @@ def create_app(settings: Settings | None = None, config: AppConfig | None = None
     # ------------------------------------------------------------------ pages
 
     def build_today(request: Request, views: dict[str, Any]) -> dict[str, Any]:
-        return {"today": d.today(views, state.now()), "autorefresh": 60}
+        return {
+            "today": d.today(views, state.now()),
+            "autorefresh": 60 if market_hours(state.now()) else 0,
+        }
 
     def build_compare(request: Request, views: dict[str, Any]) -> dict[str, Any]:
         cached = state.compare_cache
@@ -314,11 +337,18 @@ def create_app(settings: Settings | None = None, config: AppConfig | None = None
         return {"cmp": result[0], "first": result[1]}
 
     def build_trades(request: Request, views: dict[str, Any]) -> dict[str, Any]:
-        return {"systems": d.trades(views, state.now()), "autorefresh": 120}
+        return {
+            "systems": d.trades(views, state.now()),
+            "autorefresh": 120 if market_hours(state.now()) else 0,
+        }
 
     def build_planned(request: Request, views: dict[str, Any]) -> dict[str, Any]:
         items, cplan = d.planned(views, state.now())
-        return {"items": items, "cplan": cplan, "autorefresh": 120}
+        return {
+            "items": items,
+            "cplan": cplan,
+            "autorefresh": 120 if market_hours(state.now()) else 0,
+        }
 
     def build_c(request: Request, views: dict[str, Any]) -> dict[str, Any]:
         _, cplan = d.planned(views, state.now())
@@ -554,8 +584,8 @@ def create_app(settings: Settings | None = None, config: AppConfig | None = None
         }, media_type="application/manifest+json")  # fmt: skip
 
     async def service_worker(request: Request) -> Response:
-        return FileResponse(
-            STATIC / "sw.js", media_type="text/javascript", headers={"Service-Worker-Allowed": "/"}
+        return Response(
+            SW_JS, media_type="text/javascript", headers={"Service-Worker-Allowed": "/"}
         )
 
     async def offline(request: Request) -> Response:

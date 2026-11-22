@@ -7,13 +7,16 @@
 <meta name="robots" content="noindex, nofollow">
 <meta name="theme-color" content="#0b1220">
 <meta name="color-scheme" content="dark">
-<meta name="format-detection" content="telephone=no">
+<meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="papertrader">
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
+{% for w, h, dw, dh, r in [(1170, 2532, 390, 844, 3), (1179, 2556, 393, 852, 3), (1284, 2778, 428, 926, 3), (1290, 2796, 430, 932, 3), (1125, 2436, 375, 812, 3), (750, 1334, 375, 667, 2)] %}
+<link rel="apple-touch-startup-image" href="/static/icons/splash-{{ w }}x{{ h }}.png" media="(device-width: {{ dw }}px) and (device-height: {{ dh }}px) and (-webkit-device-pixel-ratio: {{ r }}) and (orientation: portrait)">
+{% endfor %}
 <link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
 <link rel="stylesheet" href="/static/app.css?v={{ asset_v }}">
 <script src="/static/app.js?v={{ asset_v }}" defer></script>
@@ -28,6 +31,7 @@
 </header>
 {% if flash %}<div class="flash" role="status">{{ flash }}</div>{% endif %}
 <main>
+{% if authed and tab == 'more' and request.url.path not in ('/more', '/confirm') %}<a class="back" href="/more">‹ More</a>{% endif %}
 {% if db_error %}<div class="banner bad">The app {{ db_error }}. Is Docker running on the PC?</div>{% endif %}
 {% if error %}<div class="banner bad">{{ error }}</div>{% endif %}
 {% block content %}{% endblock %}

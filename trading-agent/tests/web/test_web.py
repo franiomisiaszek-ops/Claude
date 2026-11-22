@@ -580,3 +580,25 @@ def test_avanza_mode_opens_the_app_on_the_avanza_trades(systems: dict[str, Engin
     assert 'href="/avanza"' in tabs and "Turn Avanza mode off" in client.get("/settings").text
     client.get("/mode?avanza=off")
     assert client.get("/", follow_redirects=False).status_code == 200
+
+
+def test_iphone_details(engine: Engine, database_url: str, tmp_path: Path) -> None:
+    """Versioned assets cached for good, a service worker that knows the version, a dark
+    launch screen, and a session renewed while you use the app."""
+    from papertrader.web.app import ASSET_V
+
+    clock = Clock()
+    client = make_client(database_url, tmp_path, clock)
+    log_in(client)
+    page = client.get("/").text
+    assert f"/static/app.css?v={ASSET_V}" in page and 'rel="apple-touch-startup-image"' in page
+    assert 'content="dark"' in page and "telephone=no" in page
+    assert "immutable" in client.get(f"/static/app.css?v={ASSET_V}").headers["cache-control"]
+    worker = client.get("/sw.js").text
+    assert f'const V = "{ASSET_V}"' in worker and "__ASSET_V__" not in worker
+    assert client.get("/static/icons/splash-1170x2532.png").status_code == 200
+    assert "auth" not in client.get("/").headers.get("set-cookie", "")  # fresh: not renewed
+    clock.at = NOW + timedelta(days=2)
+    renewed = client.get("/")
+    assert renewed.status_code == 200 and "pt_session=" in renewed.headers.get("set-cookie", "")
+    assert '<a class="back" href="/more">' in client.get("/news").text

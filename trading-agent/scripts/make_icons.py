@@ -10,8 +10,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 OUT = Path(__file__).resolve().parents[1] / "src/papertrader/web/static/icons"
-BACKGROUND = (26, 26, 25)
-BARS = [(57, 135, 229), (217, 89, 38), (25, 158, 112)]  # A, B, C (dark-mode steps)
+BACKGROUND = (11, 18, 32)  # the app's page colour
+BARS = [(19, 156, 140), (217, 107, 58), (139, 124, 240)]  # A teal, B orange, C violet
 
 
 def icon(size: int, *, padding: float, rounded: bool) -> Image.Image:
@@ -41,6 +41,17 @@ def icon(size: int, *, padding: float, rounded: bool) -> Image.Image:
     return image.resize((size, size), Image.LANCZOS)
 
 
+SPLASH = [(1170, 2532), (1179, 2556), (1284, 2778), (1290, 2796), (1125, 2436), (750, 1334)]
+
+
+def splash(width: int, height: int) -> Image.Image:
+    """The dark launch screen iOS shows while the app opens (no white flash)."""
+    image = Image.new("RGB", (width, height), BACKGROUND)
+    mark = icon(int(width * 0.28), padding=0.14, rounded=True)
+    image.paste(mark, ((width - mark.width) // 2, (height - mark.height) // 2), mark)
+    return image
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     icon(180, padding=0.16, rounded=False).convert("RGB").save(
@@ -50,6 +61,8 @@ def main() -> None:
     icon(512, padding=0.14, rounded=True).save(OUT / "icon-512.png")
     icon(512, padding=0.24, rounded=False).convert("RGB").save(OUT / "icon-maskable-512.png")
     icon(32, padding=0.08, rounded=True).save(OUT / "favicon-32.png")
+    for width, height in SPLASH:
+        splash(width, height).save(OUT / f"splash-{width}x{height}.png", optimize=True)
 
 
 if __name__ == "__main__":

@@ -7,14 +7,22 @@
   var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   var refreshTimer = null;
   var busy = false;
+  var last = Date.now();
+  var reg = null;
+  var root = document.documentElement;
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/sw.js").then(function (reg) {
-      document.addEventListener("visibilitychange", function () {
-        if (document.visibilityState === "visible") { reg.update().catch(function () {}); }
-      });
-    }).catch(function () {});
+    navigator.serviceWorker.register("/sw.js").then(function (r) { reg = r; }).catch(function () {});
   }
+  // The home-screen app resumes from memory: fresh numbers when it comes back after a while.
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState !== "visible") { return; }
+    if (reg) { reg.update().catch(function () {}); }
+    if (Date.now() - last > 30000 && document.querySelector("nav.tabs")) { swap(location.href, { keepScroll: true, auto: true }); }
+  });
+  window.addEventListener("pageshow", function (e) {
+    if (e.persisted && document.querySelector("nav.tabs")) { swap(location.href, { keepScroll: true, auto: true }); }
+  });
 
   // ------------------------------------------------------------------ helpers
   function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -46,9 +54,14 @@
   function swap(url, opts) {
     opts = opts || {};
     if (busy) { return Promise.resolve(); }
+    if (opts.auto) {  // never refresh under your finger or while you type
+      var f = document.activeElement;
+      if ((f && /^(INPUT|SELECT|TEXTAREA)$/.test(f.tagName)) || document.querySelector(".tip:not([hidden])")) { return Promise.resolve(); }
+    }
     busy = true;
     loading(true);
     var keep = opts.keepScroll ? window.scrollY : 0;
+    var open = opts.keepScroll ? Array.from(document.querySelectorAll("main details")).map(function (d) { return d.open; }) : [];
     return fetch(url, { credentials: "same-origin", headers: { "X-Requested-With": "swap" } }).then(function (res) {
       var landed = new URL(res.url);
       if (!res.ok || landed.pathname === "/login") { throw new Error("full load"); }
@@ -57,6 +70,12 @@
       var doc = new DOMParser().parseFromString(page.html, "text/html");
       var newMain = doc.querySelector("main");
       if (!newMain) { throw new Error("full load"); }
+      var sheet = 'link[rel="stylesheet"]', fresh = doc.querySelector(sheet);
+      if (!fresh || fresh.getAttribute("href") !== document.querySelector(sheet).getAttribute("href")) {
+        location.assign(page.url.href);  // a new version of the app: load it properly
+        return;
+      }
+      newMain.querySelectorAll("details").forEach(function (d, i) { if (i < open.length) { d.open = open[i]; } });
       document.title = doc.title;
       document.querySelector("main").replaceWith(newMain);
       ["header.top", "nav.tabs", ".flash"].forEach(function (sel) {
@@ -67,9 +86,12 @@
       document.body.dataset.autorefresh = doc.body.dataset.autorefresh || "";
       if (opts.push) { history.pushState({ swap: true }, "", page.url.pathname + page.url.search); }
       window.scrollTo(0, keep);
+      last = Date.now();
+      root.classList.remove("stale");
       start();
     }).catch(function () {
-      location.assign(url);
+      if (opts.keepScroll) { root.classList.add("stale"); }  // a refresh failed: keep what is on screen, say so
+      else { location.assign(url); }  // a page change failed: let the browser (and the offline page) handle it
     }).then(function () { busy = false; loading(false); });
   }
 
@@ -79,8 +101,14 @@
     var url = new URL(link.href, location.href);
     if (!sameApp(url)) { return; }
     evt.preventDefault();
+    if (link.closest(".tabs") && link.classList.contains("on") && url.pathname === location.pathname) {
+      // tapping the tab you are on: back to the top, or refresh when already there (like iOS apps)
+      if (window.scrollY > 0) { window.scrollTo({ top: 0, behavior: "smooth" }); } else { swap(location.href, { keepScroll: true }); }
+      return;
+    }
     swap(url.href, { push: true });
   });
+  document.addEventListener("touchstart", function () {}, { passive: true });  // makes :active work on iOS
 
   document.addEventListener("submit", function (evt) {
     var form = evt.target;
@@ -127,8 +155,8 @@
     var every = parseInt(document.body.dataset.autorefresh || "0", 10);
     if (every > 0) {
       refreshTimer = setInterval(function () {
-        if (document.visibilityState === "visible" && window.scrollY < 40) { swap(location.href, { keepScroll: true }); }
-      }, every * 1000);
+        if (document.visibilityState === "visible" && Date.now() - last >= every * 1000) { swap(location.href, { keepScroll: true, auto: true }); }
+      }, 5000);
     }
     document.querySelectorAll("input[data-done]").forEach(function (box) {
       var key = box.dataset.done, row = box.closest(".match-row");
@@ -247,13 +275,15 @@
     function hide() { tip.hidden = true; cross.setAttribute("visibility", "hidden"); marks.forEach(function (c) { c.setAttribute("visibility", "hidden"); }); }
     svg.addEventListener("pointermove", show);
     svg.addEventListener("pointerdown", show);
-    svg.addEventListener("pointerleave", hide);
+    svg.addEventListener("pointerleave", function (e) { if (e.pointerType === "mouse") { hide(); } });
     svg.addEventListener("touchstart", show, { passive: true });
     svg.addEventListener("touchend", function () { setTimeout(hide, 1800); }, { passive: true });
   }
 
-  var resizeTimer = null;
+  var resizeTimer = null, lastWidth = window.innerWidth;
   window.addEventListener("resize", function () {
+    if (window.innerWidth === lastWidth) { return; }
+    lastWidth = window.innerWidth;
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(function () { document.querySelectorAll("figure.chart").forEach(draw); }, 150);
   });
