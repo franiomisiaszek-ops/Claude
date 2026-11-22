@@ -189,18 +189,29 @@ def market_hours(now: datetime) -> bool:
 # --------------------------------------------------------------------------- formatting
 
 
+MINUS = "\u2212"  # a real minus sign: lines up with "+" and screen readers say "minus"
+
+
 def money(value: float | None, digits: int = 2) -> str:
-    return DASH if value is None else f"${value:,.{digits}f}"
+    if value is None:
+        return DASH
+    return f"{MINUS if value < 0 else ''}${abs(value):,.{digits}f}"
 
 
 def signed_money(value: float | None) -> str:
-    return DASH if value is None else f"{'+' if value >= 0 else '-'}${abs(value):,.2f}"
+    if value is None:
+        return DASH
+    return f"{'+' if round(value, 2) >= 0 else MINUS}${abs(value):,.2f}"
 
 
 def pct(value: float | None, digits: int = 1, signed: bool = True) -> str:
     if value is None:
         return DASH
-    return f"{value * 100:+.{digits}f}%" if signed else f"{value * 100:.{digits}f}%"
+    shown = round(value * 100, digits)
+    if not signed:
+        return f"{abs(shown) if shown == 0 else shown:.{digits}f}%".replace("-", MINUS)
+    sign = "+" if shown > 0 else MINUS if shown < 0 else "+"
+    return f"{sign}{abs(shown):.{digits}f}%"
 
 
 def num(value: float | None, digits: int = 2) -> str:
@@ -210,7 +221,8 @@ def num(value: float | None, digits: int = 2) -> str:
 
 
 def sign_class(value: float | None) -> str:
-    if value is None or abs(value) < 1e-12:
+    """Blue or red, judged on what is shown (so +0.0% is never coloured)."""
+    if value is None or value != value or abs(value) < 5e-5:
         return ""
     return "up" if value > 0 else "down"
 
@@ -513,7 +525,12 @@ def create_app(settings: Settings | None = None, config: AppConfig | None = None
         return render(
             request,
             "confirm.html",
-            {"tab": "more", "action": action, "back": back, "error": None},
+            {
+                "tab": "planned" if back == "/planned" else "more",
+                "action": action,
+                "back": back,
+                "error": None,
+            },
             token,
         )
 
@@ -576,7 +593,7 @@ def create_app(settings: Settings | None = None, config: AppConfig | None = None
         return JSONResponse({
             "name": "papertrader", "short_name": "papertrader", "description": "Paper-trading experiment: A vs B vs C",
             "start_url": "/", "scope": "/", "display": "standalone", "orientation": "portrait",
-            "background_color": "#0b1220", "theme_color": "#0b1220",
+            "background_color": "#000000", "theme_color": "#000000",
             "icons": [{"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
                       {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png"},
                       {"src": "/static/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png",

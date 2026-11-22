@@ -1,40 +1,59 @@
 {% extends "base.html" %}
 {% import "macros.html" as ui %}
+
+{% macro item(p) %}
+  <li>
+    <div class="trade">
+      <span class="row"><span class="act {{ p.action|lower }}">{{ p.action }}</span><span class="ticker">{{ p.ticker }}</span></span>
+      <span class="when">{{ p.when }}</span>
+      <small class="sub muted">{{ p.detail }}</small>
+    </div>
+    {% if p.why %}<p>{{ p.why }}</p>{% endif %}
+    {% if p.against %}<details><summary>Against</summary><p class="muted">{{ p.against }}</p></details>{% endif %}
+    {% if p.status and p.status not in ('planned', 'announced') %}<small class="muted">Status: {{ p.status }}</small>{% endif %}
+    {% if p.skip_ticker %}<a class="btn skip" href="/confirm?a=skip&amp;s=B&amp;t={{ p.skip_ticker }}">Skip {{ p.ticker }}</a>{% endif %}
+    {% if p.skip_order %}<a class="btn skip" href="/confirm?a=skiporder&amp;s={{ p.system }}&amp;t={{ p.skip_order }}">Skip {{ p.ticker }}</a>{% endif %}
+  </li>
+{% endmacro %}
+
 {% block content %}
 <h1>Planned</h1>
-<p class="muted">What the systems are about to buy or sell, why, and when. Orders of B and C announced on Telegram can be skipped here too; A's are information only (A is frozen).</p>
-{% for name in ['A', 'B'] %}{% if name in views %}
+
+{% if 'B' in views %}
+{% set mine = items|selectattr('system', 'equalto', 'B')|list %}
 <section class="card">
-  <h2>{{ ui.sysname(name) }}</h2>
-  {% set mine = items|selectattr('system', 'equalto', name)|list %}
-  {% if not mine %}<p class="muted">Nothing planned right now. The judge decides at 08:20 New York time; orders go in at 09:35.</p>{% endif %}
-  <ul class="plain">
-  {% for p in mine %}
-    <li>
-      <div class="row"><span class="act {{ p.action|lower }}">{{ p.action }}</span><span class="ticker">{{ p.ticker }}</span><span class="grow muted">{{ p.when }}</span>
-        {% if p.skip_ticker %}<a class="btn small" href="/confirm?a=skip&amp;s=B&amp;t={{ p.skip_ticker }}">Skip</a>{% endif %}
-        {% if p.skip_order %}<a class="btn small" href="/confirm?a=skiporder&amp;s={{ p.system }}&amp;t={{ p.skip_order }}">Skip</a>{% endif %}</div>
-      <small>{{ p.detail }}</small>
-      {% if p.why %}<p>{{ p.why }}</p>{% endif %}
-      {% if p.against %}<p class="muted">Against: {{ p.against }}</p>{% endif %}
-      {% if p.status and p.status not in ('planned', 'announced') %}<small>Status: {{ p.status }}</small>{% endif %}
-    </li>
-  {% endfor %}
-  </ul>
+  <h2>{{ ui.sysname('B') }}</h2>
+  {% if not mine %}<p class="muted">Nothing planned right now. The judge decides at 08:25 New York time; orders go in at 09:35.</p>{% endif %}
+  <ul class="plain">{% for p in mine %}{{ item(p) }}{% endfor %}</ul>
 </section>
-{% endif %}{% endfor %}
+{% endif %}
+
 {% if 'C' in views %}
 <section class="card">
   <h2>{{ ui.sysname('C') }}</h2>
-  {% for p in items|selectattr('system', 'equalto', 'C')|list %}
-  <div class="row"><span class="act {{ p.action|lower }}">{{ p.action }}</span><span class="ticker">{{ p.ticker }}</span><span class="grow muted">{{ p.when }}</span>
-    {% if p.skip_order %}<a class="btn small" href="/confirm?a=skiporder&amp;s=C&amp;t={{ p.skip_order }}">Skip</a>{% endif %}</div>
-  {% endfor %}
+  <ul class="plain">{% for p in items|selectattr('system', 'equalto', 'C') %}{{ item(p) }}{% endfor %}</ul>
   {% if not cplan %}<p class="muted">No weekly plan yet. C plans on Friday after the close and trades on Monday at 09:35.</p>{% else %}
-  <p>Plan from {{ cplan.signal_day }}'s close · orders {{ cplan.when }} · status {{ cplan.status }} · state {{ cplan.state }}</p>
-  {{ ui.table(cplan.rows, ['fund', 'action', 'now', 'target', 'why', 'review'], 'No funds.', {'now': 'share', 'target': 'share'}) }}
-  <p class="muted">Cash {{ (cplan.cash * 100)|round(0)|int }}%. Orders only for funds 20%+ away from their target. <a href="/c">Avanza list and more</a></p>
+  <p class="small muted">Plan from {{ cplan.signal_day }}'s close · orders {{ cplan.when }} · {{ cplan.status }}{% if cplan.state != 'normal' %} · {{ cplan.state }}{% endif %}</p>
+  <ul class="plain">
+  {% for r in cplan.rows %}
+    <li class="trade"><span class="row"><span class="act {{ r.action|lower }}">{{ r.action }}</span><span class="ticker">{{ r.fund }}</span></span>
+      <span class="num">{{ r.now|pct(0, false) }} → <b>{{ r.target|pct(0, false) }}</b></span>
+      <small class="sub muted">{{ r.why }}{% if r.review %} · review: {{ r.review }}{% endif %}</small></li>
+  {% endfor %}
+  </ul>
+  <p class="small muted">Cash {{ cplan.cash|pct(0, false) }}. Orders only for funds 20%+ away from their target.</p>
+  <a class="list-link" href="/avanza"><span>Match on Avanza<small class="muted">the same trades for your money, in SEK</small></span></a>
   {% endif %}
 </section>
 {% endif %}
+
+{% if 'A' in views %}
+{% set mine = items|selectattr('system', 'equalto', 'A')|list %}
+<details class="card" id="plan-A">
+  <summary>{{ ui.sysname('A') }} &nbsp;<small class="muted">information only ({{ mine|length }})</small></summary>
+  {% if not mine %}<p class="muted">Nothing planned right now.</p>{% endif %}
+  <ul class="plain">{% for p in mine %}{{ item(p) }}{% endfor %}</ul>
+</details>
+{% endif %}
+<p class="muted small">B's and C's orders come with a heads-up on Telegram 3 minutes before; Skip here works the same. A is the frozen comparison, so its orders can't be skipped.</p>
 {% endblock %}

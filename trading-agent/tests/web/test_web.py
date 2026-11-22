@@ -307,7 +307,7 @@ def test_every_page_shows_the_three_systems(
         assert "could not be built" not in response.text, (path, response.text[:2000])
         pages[path] = response.text
     today = pages["/"]
-    assert "$101,900" in today and "live, 08:59" in today and "Paused: testing" in today  # A, live
+    assert "$101,900" in today and "live, 08:59" in today and "paused · testing" in today  # A, live
     assert "C · ETF trend portfolio" in today and "+0.17%" in today  # SPY today: 606 vs 605
     assert "+0.89%" in today and "+0.73%" in today  # A today: 101,900 / 101,000, and that minus SPY
     trades = pages["/trades"]

@@ -10,7 +10,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 OUT = Path(__file__).resolve().parents[1] / "src/papertrader/web/static/icons"
-BACKGROUND = (11, 18, 32)  # the app's page colour
+BACKGROUND = (0, 0, 0)  # the app's page colour
 BARS = [(19, 156, 140), (217, 107, 58), (139, 124, 240)]  # A teal, B orange, C violet
 
 

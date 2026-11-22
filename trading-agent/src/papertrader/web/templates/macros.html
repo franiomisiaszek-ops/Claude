@@ -1,24 +1,25 @@
-{% macro sysname(name) %}<span class="sys"><span class="dot s{{ SLOTS.get(name, 0) }}"></span>{{ TITLES.get(name, name) }}</span>{% endmacro %}
+{% macro sysname(name) %}<span class="sys"><span class="mono s{{ SLOTS.get(name, 0) }}" aria-hidden="true">{{ name[0] }}</span>{{ TITLES.get(name, name) }}</span>{% endmacro %}
 
 {% macro switcher(base, systems, current, extra='') %}
-{% if systems|length > 1 %}<div class="seg" role="tablist">{% for s in systems %}<a href="{{ base }}?s={{ s }}{{ extra }}" class="{{ 'on' if s == current else '' }}">{{ s }}</a>{% endfor %}</div>{% endif %}
+{% if systems|length > 1 %}<div class="seg">{% for s in systems %}<a href="{{ base }}?s={{ s }}{{ extra }}" class="{{ 'on' if s == current else '' }}"{% if s == current %} aria-current="page"{% endif %}>{{ s }}</a>{% endfor %}</div>{% endif %}
 {% endmacro %}
 
 {# A line chart. series: list of (name, points) with points [(iso day, value)]. #}
 {% macro chart(series, unit='%', title='', zero=true, area=false, empty='No data yet.', height=210) %}
 {% set payload = {'series': [], 'unit': unit, 'title': title, 'zero': zero, 'area': area, 'empty': empty, 'height': height} %}
 {% for name, points in series %}{% set _ = payload.series.append({'name': name, 'slot': SLOTS.get(name, loop.index0 % 4), 'points': points}) %}{% endfor %}
+{% set has_data = series|selectattr(1)|list|length > 0 %}
 <figure class="chart" data-chart="{{ payload|tojson|forceescape }}">
-  {% if series|length > 1 %}<div class="legend">{% for name, points in series %}<span><i class="dot s{{ SLOTS.get(name, loop.index0 % 4) }}"></i>{{ name }}</span>{% endfor %}</div>{% endif %}
+  {% if has_data %}<div class="legend"><span class="when">Latest</span>{% for name, points in series if points %}<span data-name="{{ name }}"><i class="dot s{{ SLOTS.get(name, loop.index0 % 4) }}{{ ' dash' if name == 'SPY' }}"></i>{{ name }} <b class="v"></b></span>{% endfor %}</div>{% endif %}
   <div class="plot"></div>
   <div class="tip" hidden></div>
-  <details><summary>Table</summary>
+  {% if has_data %}<details><summary>Show numbers</summary>
     <div class="scroll"><table>
       <tr><th>Day</th>{% for name, points in series %}<th class="n">{{ name }}</th>{% endfor %}</tr>
       {% set days = [] %}{% for name, points in series %}{% for p in points %}{% if p[0] not in days %}{% set _ = days.append(p[0]) %}{% endif %}{% endfor %}{% endfor %}
-      {% for dday in days|sort(reverse=true) %}<tr><td>{{ dday }}</td>{% for name, points in series %}<td class="n">{% for p in points %}{% if p[0] == dday %}{{ '%+.2f%%'|format(p[1]) if unit == '%' else p[1]|money }}{% endif %}{% endfor %}</td>{% endfor %}</tr>{% endfor %}
+      {% for dday in days|sort(reverse=true) %}<tr><td>{{ dday }}</td>{% for name, points in series %}<td class="n">{% for p in points %}{% if p[0] == dday %}{{ (p[1] / 100)|pct(2) if unit == '%' else p[1]|money }}{% endif %}{% endfor %}</td>{% endfor %}</tr>{% endfor %}
     </table></div>
-  </details>
+  </details>{% endif %}
 </figure>
 {% endmacro %}
 
@@ -67,3 +68,15 @@
   </svg>
 </section>
 {% endmacro %}
+
+
+{# From the stop to the target, with where the price is now (blue above the entry, red below). #}
+{% macro rangebar(stop, entry, price, target) %}{% if stop and target and price and target != stop %}
+{% set k = 100 / (target - stop) %}{% set e = [[(entry - stop) * k, 0]|max, 100]|min %}{% set p = [[(price - stop) * k, 0]|max, 100]|min %}
+<svg class="range sub" viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true">
+  <rect class="track" y="4" width="100" height="2"/>
+  <rect class="{{ 'up' if p >= e else 'down' }}" x="{{ [e, p]|min }}" y="3" width="{{ [(p - e)|abs, 0.6]|max }}" height="4"/>
+  <rect class="mark" x="{{ p - 0.6 }}" width="1.2" height="10"/>
+</svg>
+<div class="range-ends sub"><small class="muted">stop {{ stop|money }}</small><small class="muted">target {{ target|money }}</small></div>
+{% endif %}{% endmacro %}

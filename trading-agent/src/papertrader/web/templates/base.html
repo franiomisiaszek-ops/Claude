@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{% block title %}papertrader{% endblock %}</title>
 <meta name="robots" content="noindex, nofollow">
-<meta name="theme-color" content="#0b1220">
+<meta name="theme-color" content="#000000">
 <meta name="color-scheme" content="dark">
 <meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -26,8 +26,8 @@
 {% if authed %}<div class="pull" aria-hidden="true">Release to refresh</div>{% endif %}
 <header class="top">
   <a class="brand" href="/">papertrader</a><span class="paper">PAPER</span>
-  <span class="now"><b>{{ now_local }}</b> · NY {{ now }}</span>
-  {% if authed %}<button class="icon-btn" type="button" data-action="reload" aria-label="Refresh">↻</button>{% endif %}
+  <span class="now">New York {{ now }}</span>
+  {% if authed %}<button class="icon-btn" type="button" data-action="reload" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>{% endif %}
 </header>
 {% if flash %}<div class="flash" role="status">{{ flash }}</div>{% endif %}
 <main>

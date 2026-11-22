@@ -10,12 +10,17 @@
 {% if cplan %}
 <section class="card">
   <h2>This week's plan</h2>
-  <p>From {{ cplan.signal_day }}'s close · orders {{ cplan.when }} · status {{ cplan.status }} · state {{ cplan.state }}</p>
-  {{ ui.table(cplan.rows, ['fund', 'group', 'action', 'now', 'target', 'why', 'review'], 'No funds.', {'now': 'share', 'target': 'share'}) }}
+  <p class="small muted">From {{ cplan.signal_day }}'s close · orders {{ cplan.when }} · {{ cplan.status }}{% if cplan.state != 'normal' %} · {{ cplan.state }}{% endif %}</p>
+  <ul class="plain">
+  {% for r in cplan.rows %}
+    <li class="trade"><span class="row"><span class="act {{ r.action|lower }}">{{ r.action }}</span><span class="ticker">{{ r.fund }}</span><small class="muted">{{ r.group }}</small></span>
+      <span class="num">{{ r.now|pct(0, false) }} → <b>{{ r.target|pct(0, false) }}</b></span>
+      <small class="sub muted">{{ r.why }}{% if r.review %} · review: {{ r.review }}{% endif %}</small></li>
+  {% endfor %}
+  </ul>
   {% if cplan.note %}<p class="muted">Review: {{ cplan.note }}</p>{% endif %}
-  <h3>Copy on Avanza ({{ portfolio.mirror_capital_usd|money(0) }} ≈ {{ '{:,.0f}'.format(portfolio.mirror_capital_usd * portfolio.sek_per_usd) }} SEK)</h3>
-  <ul class="plain">{% for a in cplan.avanza %}<li><div class="row"><span class="grow">{{ a.product }} <small class="muted">({{ a.fund }})</small></span><b>{{ a.usd|money(0) }}</b> <small>≈ {{ '{:,.0f}'.format(a.sek) }} SEK</small></div></li>{% endfor %}</ul>
-  <p class="muted">Buy the whole number of shares closest to each amount. Check every product name on Avanza before buying.</p>
+  <p class="muted small">Avanza names for these funds: {% for a in cplan.avanza %}{{ a.product }} ({{ a.fund }}){{ ', ' if not loop.last else '.' }}{% endfor %}</p>
+  <a class="list-link" href="/avanza"><span>Match on Avanza<small class="muted">the trades to do, for your money, in SEK</small></span></a>
 </section>
 {% else %}<p class="muted">No weekly plan yet: C plans on Friday after the close.</p>{% endif %}
 {% if extras and extras.backtest %}
@@ -23,7 +28,7 @@
   <h2>The 20-year backtest ({{ extras.backtest.ran }})</h2>
   <div class="scroll"><table>
     <tr><th></th><th>Years</th><th class="n">Per year</th><th class="n">Sharpe</th><th class="n">Worst fall</th></tr>
-    {% for label, period, s in extras.backtest.rows %}<tr><td>{{ label }}</td><td>{{ '2004-2015 (chosen here)' if period == 'in_sample' else '2016 on (never seen)' }}</td>
+    {% for label, period, s in extras.backtest.rows %}<tr><td>{{ label }}</td><td>{{ '2004–15 (settings chosen)' if period == 'in_sample' else '2016– (unseen)' }}</td>
       <td class="n">{{ s.get('cagr')|pct if s.get('cagr') is not none else '–' }}</td><td class="n">{{ s.get('sharpe')|num if s.get('sharpe') is not none else '–' }}</td><td class="n">{{ s.get('max_drawdown')|pct if s.get('max_drawdown') is not none else '–' }}</td></tr>{% endfor %}
   </table></div>
   <p class="muted">{{ extras.backtest.verdict }}</p>

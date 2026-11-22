@@ -2,24 +2,27 @@
 {% import "macros.html" as ui %}
 {% block content %}
 <h1>Trades</h1>
+{% if systems %}<p class="muted small">{{ systems[0].live_note|capitalize }}</p>{% endif %}
 {% for s in systems %}
+{% set total = s.open|selectattr('pnl_usd', 'ne', none)|map(attribute='pnl_usd')|sum %}
 <section class="card">
-  <h2>{{ ui.sysname(s.name) }}</h2>
-  <p class="muted">{{ s.live_note }}</p>
-  <h3>Open ({{ s.open|length }})</h3>
+  <div class="row"><h2 class="grow">{{ ui.sysname(s.name) }}</h2>{% if s.open %}<b class="{{ total|cls }}">{{ total|signed_money }}</b>{% endif %}</div>
   {% if not s.open %}<p class="muted">No open positions.</p>{% else %}
   <ul class="plain">
   {% for t in s.open %}
-    <li>
-      <div class="row"><span class="ticker">{{ t.ticker }}</span><span class="act {{ 'buy' if t.side == 'long' else 'short' }}">{{ t.side|upper }}</span>
-        <span class="grow muted">{{ t.qty|num(3) }} shares{% if t.note %} · {{ t.note }}{% endif %}</span>
-        <b class="{{ t.pnl_usd|cls }}">{{ t.pnl_usd|signed_money }}</b> <span class="{{ t.pnl_pct|cls }}">{{ t.pnl_pct|pct(2) }}</span></div>
-      <small>entry {{ t.entry|money }} · now {{ t.price|money }}{% if t.target %} · target {{ t.target|money }}{% endif %}{% if t.stop %} · stop {{ t.stop|money }}{% endif %}{% if t.opened %} · opened {{ t.opened }}{% endif %}{% if t.left %} · time left {{ t.left }}{% endif %}</small>
+    <li class="trade" id="pos-{{ s.name }}-{{ t.ticker }}">
+      <span class="row"><span class="ticker">{{ t.ticker }}</span><span class="act {{ 'buy' if t.side == 'long' else 'short' }}">{{ t.side|upper }}</span></span>
+      <span class="pnl {{ t.pnl_usd|cls }}">{{ t.pnl_usd|signed_money }}</span>
+      <small class="muted">{{ t.qty|num(3) }} shares · entry {{ t.entry|money }} · now {{ t.price|money }}{% if t.left %} · time left {{ t.left }}{% endif %}</small>
+      <small class="pct {{ t.pnl_pct|cls }}">{{ t.pnl_pct|pct(2) }}</small>
+      {{ ui.rangebar(t.stop, t.entry, t.price, t.target) }}
+      {% if t.stop and not t.target %}<small class="sub muted">emergency stop {{ t.stop|money }}</small>{% endif %}
+      {% if t.note %}<small class="sub muted">{{ t.note }}</small>{% endif %}
     </li>
   {% endfor %}
   </ul>
   {% endif %}
-  <details{% if not s.open %} open{% endif %}><summary>{{ 'Recent orders' if s.name == 'C' else 'Closed trades' }} ({{ s.closed|length }})</summary>
+  <details id="closed-{{ s.name }}"{% if not s.open %} open{% endif %}><summary>{{ 'Recent orders' if s.name == 'C' else 'Closed trades' }} ({{ s.closed|length }})</summary>
     {% if s.name == 'C' %}
       {% if not s.closed %}<p class="muted">No filled orders yet.</p>{% endif %}
       <ul class="plain">{% for o in s.closed %}
@@ -34,7 +37,7 @@
           <span class="pnl {{ t['P&L $']|cls }}">{{ t['P&L $']|signed_money }} <small>{{ '%+.2f%%'|format(t['P&L %']) if t['P&L %'] is not none and t['P&L %'] == t['P&L %'] else '' }}</small></span>
           <small class="sub muted">{{ t.closed }} · {{ t['exit by'] or 'closed' }}{% if t['days held'] is not none and t['days held'] == t['days held'] %} · {{ t['days held'] }} days{% endif %}{% if t['vs SPY %'] is not none and t['vs SPY %'] == t['vs SPY %'] %} · vs SPY {{ '%+.2f%%'|format(t['vs SPY %']) }}{% endif %}{% if t['agents right'] %} · right: {{ t['agents right'] }}{% endif %}</small></li>
       {% endfor %}</ul>
-      {% if s.closed %}<details><summary>All columns</summary>{{ ui.table(s.closed, s.closed_columns, '', {'P&L $': 'signed', 'P&L %': 'pct100', 'vs SPY %': 'pct100', 'days held': 'num'}) }}</details>{% endif %}
+      {% if s.closed %}<details id="cols-{{ s.name }}"><summary>All columns</summary>{{ ui.table(s.closed, s.closed_columns, '', {'P&L $': 'signed', 'P&L %': 'pct100', 'vs SPY %': 'pct100', 'days held': 'num'}) }}</details>{% endif %}
     {% endif %}
   </details>
 </section>

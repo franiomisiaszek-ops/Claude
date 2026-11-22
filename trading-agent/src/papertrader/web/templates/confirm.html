@@ -11,8 +11,8 @@
     <input type="hidden" name="s" value="{{ action.system }}">
     <input type="hidden" name="t" value="{{ action.ticker }}">
     <input type="hidden" name="confirm" value="yes">
-    <div class="row"><button class="btn {{ 'danger' if action.kind != 'resume' else 'primary' }}" type="submit">Yes, {{ action.kind }}{{ ' ' ~ action.ticker if action.ticker else ' ' ~ action.system }}</button>
-    <a class="btn" href="{{ back }}">Cancel</a></div>
+    <div class="confirm-actions"><a class="btn" href="{{ back }}">Cancel</a>
+    <button class="btn {{ 'danger' if action.kind != 'resume' else 'primary' }}" type="submit">Yes, {{ 'skip' if action.kind == 'skiporder' else action.kind }}{{ ' ' ~ action.ticker if action.kind == 'skip' else ' ' ~ action.system }}</button></div>
   </form>
   <p class="muted">This is logged and sends you a Telegram message.</p>
 </section>

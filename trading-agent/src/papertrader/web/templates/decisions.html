@@ -7,15 +7,24 @@
 {% if not choices %}<p class="muted">No decisions yet. The judge decides at 08:20 New York time on trading days.</p>{% else %}
 <form method="get" action="/decisions" class="row">
   <input type="hidden" name="s" value="{{ system }}">
-  <select name="id" aria-label="Decision" class="btn grow">{% for i, label in choices %}<option value="{{ i }}"{% if dv and dv.id == i %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
-  <button class="btn" type="submit">Show</button>
+  <select name="id" aria-label="Decision" class="btn grow" data-autosubmit>{% for i, label in choices %}<option value="{{ i }}"{% if dv and dv.id == i %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+  <noscript><button class="btn" type="submit">Show</button></noscript>
 </form>
 {% if dv %}
 <section class="card">
   <p class="muted">{{ dv.as_of }} New York · {{ dv.kind|replace('_', ' ') }} · judge {{ dv.model }} · run cost {{ dv.cost_usd|money }}{% if dv.threshold %} · trade bar {{ (dv.threshold * 100)|round|int }}%{% endif %}</p>
   <p><b>Market:</b> {{ dv.summary }}</p>
   <h3>Ideas</h3>
-  {{ ui.table(dv.ideas.to_dict('records'), ['rank', 'action', 'ticker', 'status', 'final %', 'entry', 'target', 'stop', 'size %', 'days', 'why', 'against', 'note'], 'No trade ideas: nothing was good enough.', {'target': 'money', 'stop': 'money'}) }}
+  {% set ideas = dv.ideas.to_dict('records') %}
+  {% if not ideas %}<p class="muted">No trade ideas: nothing was good enough.</p>{% endif %}
+  <ul class="plain">{% for i in ideas %}
+    <li><div class="trade"><span class="row"><span class="act {{ 'buy' if i.action == 'buy' else 'short' }}">{{ i.action|upper|replace('_', ' ') }}</span><span class="ticker">{{ i.ticker }}</span></span>
+      <span class="when">{{ i['final %'] }}%</span>
+      <small class="sub muted">#{{ i.rank }} · {{ i.status|replace('_', ' ') }} · entry {{ i.entry }} · target {{ i.target|money }} · stop {{ i.stop|money }} · {{ i['size %'] }}% of equity · {{ i.days }} days</small></div>
+      <p>{{ i.why }}</p>
+      {% if i.against %}<details><summary>Against</summary><p class="muted">{{ i.against }}</p></details>{% endif %}
+      {% if i.note %}<small class="muted">{{ i.note }}</small>{% endif %}</li>
+  {% endfor %}</ul>
   <div class="grid two">
     <div><h3>Rejected by the judge</h3>{{ ui.table(dv.rejected.to_dict('records'), ['ticker', 'reason'], 'None.') }}</div>
     <div><h3>Positions to sell</h3>{{ ui.table(dv.exits.to_dict('records'), ['ticker', 'reason'], 'None.') }}</div>

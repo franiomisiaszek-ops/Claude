@@ -3,47 +3,49 @@
 {% block content %}
 <h1>Today</h1>
 {% if today %}
+{% set alerts = [] %}
+{% for c in today.cards %}{% for when, text in c.alerts %}{% set _ = alerts.append((c.name, when, text)) %}{% endfor %}{% endfor %}
+{% if alerts %}
+<details class="banner warn" id="alerts" open>
+  <summary>Alerts, last 3 days ({{ alerts|length }})</summary>
+  <ul class="plain">{% for name, when, text in alerts %}<li><small>[{{ name }}] {{ when }}</small><br>{{ text }}</li>{% endfor %}</ul>
+</details>
+{% endif %}
+
 {% if today.start %}
-{{ ui.race([('A', today.cards|selectattr('name', 'equalto', 'A')|map(attribute='since_start_pct')|first|default(none)), ('B', today.cards|selectattr('name', 'equalto', 'B')|map(attribute='since_start_pct')|first|default(none)), ('C', today.cards|selectattr('name', 'equalto', 'C')|map(attribute='since_start_pct')|first|default(none)), ('SPY', today.spy_since_start_pct)], 'Since the start (' ~ today.start.strftime('%d %b') ~ ')') }}
+{{ ui.race([('A', today.cards|selectattr('name', 'equalto', 'A')|map(attribute='since_start_pct')|first|default(none)), ('B', today.cards|selectattr('name', 'equalto', 'B')|map(attribute='since_start_pct')|first|default(none)), ('C', today.cards|selectattr('name', 'equalto', 'C')|map(attribute='since_start_pct')|first|default(none)), ('SPY', today.spy_since_start_pct)], 'Since the start, ' ~ today.start.strftime('%d %b')) }}
 {% else %}
 <section class="card"><b>The experiment has not started yet.</b><p class="muted">From the first day, the race between A, B, C and SPY shows here.</p></section>
 {% endif %}
-<p class="muted">
-  SPY today <b class="{{ today.spy_day_pct|cls }}">{{ today.spy_day_pct|pct(2) }}</b> ({{ today.spy_note }})
-  {% if today.start %} · since the start ({{ today.start.strftime('%d %b %Y') }}) <b class="{{ today.spy_since_start_pct|cls }}">{{ today.spy_since_start_pct|pct }}</b>{% else %} · the experiment has not started yet{% endif %}
-</p>
-<a class="card shortcut" href="/avanza"><span class="grow"><b>Match on Avanza</b><small class="muted">your C trades this week, in SEK</small></span><span aria-hidden="true">›</span></a>
+<p class="muted small">SPY today <b class="{{ today.spy_day_pct|cls }}">{{ today.spy_day_pct|pct(2) }}</b> ({{ today.spy_note }})</p>
+
 <div class="grid three">
 {% for c in today.cards %}
-  <section class="card">
+  <section class="card" aria-label="{{ c.title }}">
     <div class="row"><div class="grow">{{ ui.sysname(c.name) }}</div>
       {% if c.kill_switch %}<span class="badge bad">kill switch</span>
-      {% elif c.paused %}<span class="badge warn">paused</span>
-      {% elif c.running %}<span class="badge ok">running</span>
-      {% else %}<span class="badge bad">not running</span>{% endif %}
+      {% elif c.paused %}<span class="badge warn">paused · {{ c.paused }}</span>
+      {% elif not c.running %}<span class="badge bad">not running</span>{% endif %}
     </div>
     <div class="big">{{ c.equity|money(0) }}</div>
-    <small>{{ c.live_note }}</small>
-    <div class="stats">
-      <div class="stat"><div class="label">Today</div><div class="value {{ c.day_pct|cls }}">{{ c.day_pct|pct(2) }}</div></div>
-      <div class="stat"><div class="label">Today vs SPY</div><div class="value {{ (c.day_pct - today.spy_day_pct)|cls if c.day_pct is not none and today.spy_day_pct is not none else '' }}">{{ (c.day_pct - today.spy_day_pct)|pct(2) if c.day_pct is not none and today.spy_day_pct is not none else '–' }}</div></div>
-      <div class="stat"><div class="label">Since the start</div><div class="value {{ c.since_start_pct|cls }}">{{ c.since_start_pct|pct }}</div></div>
-      <div class="stat"><div class="label">vs SPY since the start</div><div class="value {{ (c.since_start_pct - today.spy_since_start_pct)|cls if c.since_start_pct is not none and today.spy_since_start_pct is not none else '' }}">{{ (c.since_start_pct - today.spy_since_start_pct)|pct if c.since_start_pct is not none and today.spy_since_start_pct is not none else '–' }}</div></div>
-      <div class="stat"><div class="label">Open positions</div><div class="value">{{ c.positions }}</div></div>
-      <div class="stat"><div class="label">Claude this month</div><div class="value">{{ c.month_spend|money }} <small>of {{ c.budget|money(0) }}</small></div></div>
-      {% if c.name != 'C' %}
-      <div class="stat"><div class="label">Closed trades</div><div class="value">{{ c.closed }}{% if c.win_rate is not none %} <small>{{ c.win_rate|pct(0, false) }} won</small>{% endif %}</div></div>
-      <div class="stat"><div class="label">Realised P&amp;L</div><div class="value {{ c.realised|cls }}">{{ c.realised|signed_money }}</div></div>
-      {% endif %}
-    </div>
-    {% if c.last_research %}<p><small>Last research {{ c.last_research }} · pattern model: {{ c.model }}</small></p>{% endif %}
-    {% if c.paused %}<p class="banner warn">Paused: {{ c.paused }}</p>{% endif %}
-    <p><small>App {{ c.heartbeat }}</small></p>
-    {% if c.alerts %}
-    <details open><summary>Alerts, last 3 days ({{ c.alerts|length }})</summary>
-      <ul class="plain">{% for when, text in c.alerts %}<li><small>{{ when }}</small><br>{{ text }}</li>{% endfor %}</ul>
+    <table class="mini">
+      <thead><tr><th></th><th scope="col">Today</th><th scope="col">{{ 'Since ' ~ today.start.strftime('%d %b') if today.start else 'Since start' }}</th></tr></thead>
+      <tr><th scope="row">Return</th><td class="{{ c.day_pct|cls }}">{{ c.day_pct|pct(2) }}</td><td class="{{ c.since_start_pct|cls }}">{{ c.since_start_pct|pct }}</td></tr>
+      <tr><th scope="row">vs SPY</th>
+        <td class="{{ (c.day_pct - today.spy_day_pct)|cls if c.day_pct is not none and today.spy_day_pct is not none else '' }}">{{ (c.day_pct - today.spy_day_pct)|pct(2) if c.day_pct is not none and today.spy_day_pct is not none else '–' }}</td>
+        <td class="{{ (c.since_start_pct - today.spy_since_start_pct)|cls if c.since_start_pct is not none and today.spy_since_start_pct is not none else '' }}">{{ (c.since_start_pct - today.spy_since_start_pct)|pct if c.since_start_pct is not none and today.spy_since_start_pct is not none else '–' }}</td></tr>
+    </table>
+    <p class="small muted">{{ c.positions }} open{% if c.name != 'C' %} · {{ c.closed }} closed{% if c.win_rate is not none %}, {{ c.win_rate|pct(0, false) }} won{% endif %} · realised <span class="{{ c.realised|cls }}">{{ c.realised|signed_money }}</span>{% endif %}</p>
+    {% if c.budget and c.month_spend > 0.8 * c.budget %}<p class="badge warn">Claude {{ c.month_spend|money }} of {{ c.budget|money(0) }} this month</p>{% endif %}
+    {% if c.name == 'C' %}<a class="list-link" href="/avanza"><span>Match on Avanza<small class="muted">your C trades this week, in SEK</small></span></a>{% endif %}
+    <details id="info-{{ c.name }}"><summary>Details</summary>
+      <dl class="kv">
+        <dt>Numbers</dt><dd>{{ c.live_note }}</dd>
+        <dt>App</dt><dd>{{ c.heartbeat }}</dd>
+        <dt>Claude this month</dt><dd>{{ c.month_spend|money }} of {{ c.budget|money(0) }}</dd>
+        {% if c.last_research %}<dt>Last research</dt><dd>{{ c.last_research }}</dd><dt>Pattern model</dt><dd>{{ c.model }}</dd>{% endif %}
+      </dl>
     </details>
-    {% endif %}
   </section>
 {% else %}
   <p class="muted">No system is set up yet.</p>

@@ -15,8 +15,16 @@
 <h2>Drawdown (fall from the peak)</h2>
 {{ ui.chart(cmp.drawdown.items()|list, '%', 'Drawdown', empty='No days yet.') }}
 <h2>The numbers</h2>
-{{ ui.table(cmp.rows, ['system', 'days', 'net', 'vs_spy', 'gross', 'worst_fall', 'sharpe', 'hit_rate', 'ic', 'brier', 'trades', 'traded_usd', 'spread_cost_usd', 'claude_usd', 'data_usd', 'net_at_capital'], 'No system has data yet.',
-   {'net': 'pct', 'vs_spy': 'pct', 'gross': 'pct', 'worst_fall': 'pct', 'sharpe': 'num', 'hit_rate': 'pct', 'ic': 'num', 'brier': 'num', 'trades': 'num', 'traded_usd': 'money', 'spread_cost_usd': 'money', 'claude_usd': 'money', 'data_usd': 'money', 'net_at_capital': 'signed', 'days': 'num'}) }}
+{% set main_rows = [('Return after costs', 'net', 'pct'), ('vs SPY', 'vs_spy', 'pct'), ('Worst fall', 'worst_fall', 'pct'), ('Sharpe', 'sharpe', 'num'), ('Trades', 'trades', 'num'), ('Claude $', 'claude_usd', 'money'), ('Profit on ' ~ cmp.real_capital|money(0), 'net_at_capital', 'signed')] %}
+{% set more_rows = [('Days', 'days', 'num'), ('Before costs', 'gross', 'pct'), ('Hit rate (5 days)', 'hit_rate', 'pct'), ('IC (5 days)', 'ic', 'num'), ('Brier (5 days)', 'brier', 'num'), ('Dollars traded', 'traded_usd', 'money'), ('Trading cost (est.)', 'spread_cost_usd', 'money'), ('Data $', 'data_usd', 'money')] %}
+{% macro metrics(rows_spec) %}
+<div class="scroll"><table class="metrics">
+  <tr><th></th>{% for r in cmp.rows %}<th class="n" scope="col"><span class="mono s{{ SLOTS.get(r.system, 0) }}" aria-hidden="true">{{ r.system }}</span> <span class="sr-only">{{ r.system }}</span></th>{% endfor %}</tr>
+  {% for label, key, f in rows_spec %}<tr><th scope="row">{{ label }}</th>{% for r in cmp.rows %}{% set v = r.get(key) %}
+    <td class="n {{ v|cls if f in ('pct', 'signed') else '' }}">{% if v is none %}–{% elif f == 'pct' %}{{ v|pct }}{% elif f == 'money' %}{{ v|money }}{% elif f == 'signed' %}{{ v|signed_money }}{% else %}{{ v|num }}{% endif %}</td>{% endfor %}</tr>{% endfor %}
+</table></div>
+{% endmacro %}
+{% if cmp.rows %}{{ metrics(main_rows) }}<details id="all-numbers"><summary>All numbers</summary>{{ metrics(more_rows) }}</details>{% else %}<p class="muted">No system has data yet.</p>{% endif %}
 <details><summary>What the columns mean</summary>
 <dl class="kv">
   <dt>net</dt><dd>return after Claude and data costs</dd>
