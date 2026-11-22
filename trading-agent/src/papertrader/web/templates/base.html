@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{% block title %}papertrader{% endblock %}</title>
 <meta name="robots" content="noindex, nofollow">
-<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#0b1220">
+<meta name="color-scheme" content="dark">
+<meta name="format-detection" content="telephone=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -18,9 +19,11 @@
 <script src="/static/app.js?v={{ asset_v }}" defer></script>
 </head>
 <body{% if autorefresh %} data-autorefresh="{{ autorefresh }}"{% endif %}>
+<div class="loading" aria-hidden="true"></div>
+{% if authed %}<div class="pull" aria-hidden="true">Release to refresh</div>{% endif %}
 <header class="top">
   <a class="brand" href="/">papertrader</a><span class="paper">PAPER</span>
-  <span class="now">{{ now }} NY</span>
+  <span class="now"><b>{{ now_local }}</b> · NY {{ now }}</span>
   {% if authed %}<button class="icon-btn" type="button" data-action="reload" aria-label="Refresh">↻</button>{% endif %}
 </header>
 {% if flash %}<div class="flash" role="status">{{ flash }}</div>{% endif %}
@@ -32,13 +35,14 @@
 </main>
 {% if authed %}
 <nav class="tabs" aria-label="Pages">
-{% for key, href, label in TABS %}
+{% for key, href, label in tabs or TABS %}
   <a href="{{ href }}" class="{{ 'on' if tab == key else '' }}"{% if tab == key %} aria-current="page"{% endif %}>
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     {% if key == 'today' %}<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>
     {% elif key == 'compare' %}<path d="M3 20h18M5 16l4-5 4 3 6-8"/>
     {% elif key == 'trades' %}<path d="M4 7h13l-3-3M20 17H7l3 3"/>
     {% elif key == 'planned' %}<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>
+    {% elif key == 'avanza' %}<path d="M4 12h12M12 6l6 6-6 6"/><path d="M4 5v14" />
     {% else %}<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>{% endif %}
     </svg>{{ label }}</a>
 {% endfor %}

@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.applications import Starlette
@@ -71,9 +72,15 @@ HEADERS = [
     (b"cross-origin-resource-policy", b"same-origin"),
     (b"strict-transport-security", b"max-age=31536000"),
 ]
+AVANZA_TABS = (("avanza", "/avanza", "Avanza"), ("today", "/today", "Today"), ("trades", "/trades", "Trades"),
+               ("planned", "/planned", "Planned"), ("more", "/more", "More"))  # fmt: skip
+MODE = "pt_mode"  # "avanza": the app opens on Match on Avanza (a display choice, this device only)
+CAPITAL = "pt_sek"  # your Avanza money in SEK, remembered on this device
 TABS = (("today", "/", "Today"), ("compare", "/compare", "Compare"), ("trades", "/trades", "Trades"),
         ("planned", "/planned", "Planned"), ("more", "/more", "More"))  # fmt: skip
-MORE = (("/c", "C portfolio", "C's weekly plan, the Avanza list, its backtest"),
+MORE = (("/avanza", "Match on Avanza", "only the trades you copy on Avanza, in SEK"),
+        ("/compare", "Compare A, B and C", "the experiment's charts and numbers"),
+        ("/c", "C portfolio", "C's weekly plan, its backtest, its daily chart trades"),
         ("/decisions", "Decisions and reports", "the judge's ideas and every agent report with sources"),
         ("/news", "News on held stocks", "the latest headlines for every stock held"),
         ("/postmortems", "Post-mortems", "system B's \"why did it move?\" cases"),
@@ -239,10 +246,25 @@ def create_app(settings: Settings | None = None, config: AppConfig | None = None
     ) -> Response:
         record = auth.load(state.auth_file)
         flash = request.cookies.get(FLASH)
+        avanza_mode = request.cookies.get(MODE) == "avanza"
+        moment = state.now()
+        cookies = context.pop("_cookies", {})
         response = templates.TemplateResponse(request, name, {
             "csrf": auth.csrf_token(record, token) if record and token else "", "flash": flash,
-            "db_error": state.db_error, "now": d.ny(state.now(), "%a %d %b %H:%M"), "authed": bool(token), **context,
+            "db_error": state.db_error, "now": d.ny(moment, "%H:%M"),
+            "now_local": moment.astimezone(ZoneInfo(state.config.web.local_timezone)).strftime("%a %H:%M"),
+            "authed": bool(token), "tabs": AVANZA_TABS if avanza_mode else TABS, "avanza_mode": avanza_mode, **context,
         }, status_code=status)  # fmt: skip
+        for key, value in cookies.items():
+            response.set_cookie(
+                key,
+                value,
+                max_age=365 * 86400,
+                path="/",
+                secure=True,
+                httponly=True,
+                samesite="lax",
+            )
         if flash:
             response.delete_cookie(FLASH, path="/")
         return response
@@ -254,6 +276,8 @@ def create_app(settings: Settings | None = None, config: AppConfig | None = None
             token = session_token(request)
             if token is None:
                 return RedirectResponse(f"/login?next={request.url.path}", status_code=303)
+            if request.url.path == "/" and request.cookies.get(MODE) == "avanza":
+                return RedirectResponse("/avanza", status_code=303)  # Avanza mode opens there
             views = await run_in_threadpool(state.get_views)
             try:
                 context = await run_in_threadpool(build, request, views)
@@ -352,6 +376,24 @@ def create_app(settings: Settings | None = None, config: AppConfig | None = None
 
     def build_more(request: Request, views: dict[str, Any]) -> dict[str, Any]:
         return {}
+
+    def build_avanza(request: Request, views: dict[str, Any]) -> dict[str, Any]:
+        from papertrader.web.avanza import capital_from, match
+
+        if "C" not in views:
+            return {"av": None}
+        portfolio = views["C"].config.portfolio
+        default = round(portfolio.mirror_capital_usd * portfolio.sek_per_usd)
+        asked = request.query_params.get("sek")
+        capital = capital_from(
+            asked if asked is not None else request.cookies.get(CAPITAL), default
+        )
+        context: dict[str, Any] = {
+            "av": match(views["C"], capital, state.now(), state.config.web.local_timezone)
+        }
+        if asked is not None and capital_from(asked, -1) > 0:
+            context["_cookies"] = {CAPITAL: str(int(capital))}
+        return context
 
     # ------------------------------------------------------------------ login
 
@@ -487,6 +529,16 @@ def create_app(settings: Settings | None = None, config: AppConfig | None = None
 
     # ------------------------------------------------------------------ plumbing
 
+    async def mode(request: Request) -> Response:
+        """Avanza mode on or off (only how this device's app opens; changes nothing else)."""
+        if session_token(request) is None:
+            return RedirectResponse("/login", status_code=303)
+        on = request.query_params.get("avanza") == "on"
+        response = RedirectResponse("/avanza" if on else "/settings", status_code=303)
+        response.set_cookie(MODE, "avanza" if on else "", max_age=365 * 86400 if on else 0, path="/", secure=True,
+                            httponly=True, samesite="lax")  # fmt: skip
+        return response
+
     async def healthz(request: Request) -> Response:
         return PlainTextResponse("ok")
 
@@ -494,7 +546,7 @@ def create_app(settings: Settings | None = None, config: AppConfig | None = None
         return JSONResponse({
             "name": "papertrader", "short_name": "papertrader", "description": "Paper-trading experiment: A vs B vs C",
             "start_url": "/", "scope": "/", "display": "standalone", "orientation": "portrait",
-            "background_color": "#0d0d0d", "theme_color": "#1a1a19",
+            "background_color": "#0b1220", "theme_color": "#0b1220",
             "icons": [{"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
                       {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png"},
                       {"src": "/static/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png",
@@ -511,6 +563,9 @@ def create_app(settings: Settings | None = None, config: AppConfig | None = None
 
     routes = [
         Route("/", page("today", "today.html", build_today)),
+        Route("/today", page("today", "today.html", build_today)),
+        Route("/avanza", page("avanza", "avanza.html", build_avanza)),
+        Route("/mode", mode),
         Route("/compare", page("compare", "compare.html", build_compare)),
         Route("/trades", page("trades", "trades.html", build_trades)),
         Route("/planned", page("planned", "planned.html", build_planned)),

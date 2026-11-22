@@ -518,3 +518,65 @@ def test_announced_orders_can_be_skipped_from_the_web_app(systems: dict[str, Eng
     )
     with make_session_factory(systems["C"])() as session:
         assert session.scalars(select(OrderWarning)).one().status == SKIPPED
+
+
+def test_match_on_avanza_shows_only_cs_trades_in_sek(systems: dict[str, Engine], database_url: str,
+                                                     tmp_path: Path) -> None:  # fmt: skip
+    seed_all(systems)
+    client = make_client(database_url, tmp_path)
+    log_in(client)
+    page = client.get("/avanza").text
+    assert "Match on Avanza" in page and 'value="10500"' in page  # $1,000 x 10.5 SEK by default
+    assert "iShares Physical Gold ETC (SGLN)" in page and "BUY" in page and "SEK" in page
+    assert 'data-done="avanza:' in page  # the "I did this" ticks
+    # GLD: 15% now, 20% target: C buys about 5% of its account -> about 5% of yours
+    doubled = client.get("/avanza?sek=21000")
+    assert 'value="21000"' in doubled.text and "pt_sek=21000" in doubled.headers.get(
+        "set-cookie", ""
+    )
+    assert 'value="21000"' in client.get("/avanza").text  # remembered on this device
+    assert 'value="10500"' in client.get("/avanza?sek=5").text  # nonsense amounts fall back
+
+
+def test_avanza_copies_cs_real_orders_once_it_traded(systems: dict[str, Engine]) -> None:
+    from papertrader.hub import SystemView
+    from papertrader.web.avanza import match
+
+    seed_all(systems)
+    with make_session_factory(systems["C"])() as session:
+        plan = session.scalars(select(Plan)).one()
+        session.add(Order(plan_id=plan.id, kind="rebalance", ticker="SPY", side="buy", qty=6, limit_price=625.0,
+                          client_order_id="c-p1-1-SPY", status="filled", filled_qty=6, filled_avg_price=625.0,
+                          updated_at=NOW))  # fmt: skip
+        plan.status = "trading"
+        session.commit()
+    view = SystemView("C", load_c_config(), systems["C"], make_session_factory(systems["C"]))
+    out = match(view, 10_000, NOW)
+    spy = next(t for t in out.trades if t.fund == "SPY")
+    assert (
+        spy.action == "BUY" and spy.status.startswith("C bought") and spy.sek == 1500
+    )  # 3,750 / 25,000 x 10,000
+    assert [h.fund for h in out.holdings] == ["SGOV", "GLD", "SPY"] and round(
+        out.cash_weight, 2
+    ) == 0.25
+
+
+def load_c_config() -> Any:
+    from papertrader.config import load_config
+
+    return load_config(PROJECT_ROOT / "config" / "c.yaml")
+
+
+def test_avanza_mode_opens_the_app_on_the_avanza_trades(systems: dict[str, Engine], database_url: str,
+                                                        tmp_path: Path) -> None:  # fmt: skip
+    client = make_client(database_url, tmp_path)
+    log_in(client)
+    assert 'href="/compare"' in client.get("/").text  # normal tab bar
+    on = client.get("/mode?avanza=on", follow_redirects=False)
+    assert on.headers["location"] == "/avanza" and "pt_mode=avanza" in on.headers["set-cookie"]
+    opened = client.get("/", follow_redirects=False)
+    assert opened.status_code == 303 and opened.headers["location"] == "/avanza"
+    tabs = client.get("/today").text
+    assert 'href="/avanza"' in tabs and "Turn Avanza mode off" in client.get("/settings").text
+    client.get("/mode?avanza=off")
+    assert client.get("/", follow_redirects=False).status_code == 200

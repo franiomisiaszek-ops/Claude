@@ -1,6 +1,6 @@
 // Keeps the app's look (styles, script, icons) on the phone, and shows a short "can't reach
 // your PC" page when it is offline. Pages with data are never stored on the phone.
-const CACHE = "papertrader-static-v1";
+const CACHE = "papertrader-static-v2";
 const ASSETS = ["/static/app.css", "/static/app.js", "/static/icons/icon-192.png", "/offline"];
 
 self.addEventListener("install", (event) => {

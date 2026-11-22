@@ -39,3 +39,31 @@
 </table></div>
 {% endif %}
 {% endmacro %}
+
+{# The race: each system's return since the start against SPY, as bars from a zero line
+   (blue above zero, red below). rows: list of (name, fraction or none). Pure SVG, coloured by CSS classes. #}
+{% macro race(rows, title='Since the start') %}
+{% set known = rows|selectattr(1, 'ne', none)|map(attribute=1)|list %}
+{% set top = [known|map('abs')|max if known else 0.01, 0.01]|max %}
+{% set w, label_w, value_w, row_h = 340, 52, 70, 34 %}
+{% set zero = label_w + (w - label_w - value_w) / 2 %}
+{% set half = (w - label_w - value_w) / 2 - 4 %}
+<section class="card race" aria-label="{{ title }}">
+  <h2>{{ title }}</h2>
+  <svg viewBox="0 0 {{ w }} {{ rows|length * row_h + 6 }}" role="img" aria-label="{{ title }}: {% for n, v in rows %}{{ n }} {{ v|pct if v is not none else 'no data' }}{{ ', ' if not loop.last }}{% endfor %}">
+    <line class="zero" x1="{{ zero }}" x2="{{ zero }}" y1="0" y2="{{ rows|length * row_h + 6 }}"/>
+    {% for name, value in rows %}
+      {% set y = loop.index0 * row_h + 4 %}
+      <circle cx="7" cy="{{ y + 13 }}" r="5" class="s{{ SLOTS.get(name, 3) }}"/>
+      <text class="name" x="18" y="{{ y + 18 }}">{{ name }}</text>
+      {% if value is not none %}
+        {% set len = [value|abs / top * half, 2]|max %}
+        <rect class="{{ 'up' if value >= 0 else 'down' }}" x="{{ zero if value >= 0 else zero - len }}" y="{{ y + 4 }}" width="{{ len }}" height="18" rx="4"/>
+        <text class="value {{ 'up' if value >= 0 else 'down' }}" x="{{ w }}" y="{{ y + 18 }}" text-anchor="end">{{ value|pct }}</text>
+      {% else %}
+        <text class="value none" x="{{ w }}" y="{{ y + 18 }}" text-anchor="end">no data yet</text>
+      {% endif %}
+    {% endfor %}
+  </svg>
+</section>
+{% endmacro %}

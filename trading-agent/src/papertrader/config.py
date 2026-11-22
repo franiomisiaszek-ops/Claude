@@ -739,6 +739,14 @@ class WebConfig(_Strict):
     # The app's address on your Tailscale network, e.g. "https://my-pc.tail1234.ts.net"
     # (optional): long Telegram reports then end with a link to the matching page.
     public_url: str = ""
+    # Times on the app are shown in your time first (New York time next to the key ones).
+    local_timezone: str = "Europe/Warsaw"
+
+    @field_validator("local_timezone")
+    @classmethod
+    def _known_zone(cls, value: str) -> str:
+        ZoneInfo(value)
+        return value
 
     @field_validator("public_url")
     @classmethod

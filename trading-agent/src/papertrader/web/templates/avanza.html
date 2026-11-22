@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Match on Avanza · papertrader{% endblock %}
+{% block content %}
+<h1>Match on Avanza</h1>
+<p class="muted">Copy system C with your own money: C's orders, scaled to your amount. Nothing else.</p>
+{% if not av %}<p class="banner warn">System C is not set up yet.</p>{% else %}
+<form class="capital card" method="get" action="/avanza">
+  <label for="sek">Your Avanza money</label>
+  <div class="row">
+    <input id="sek" name="sek" type="text" inputmode="numeric" pattern="[0-9 ]*" value="{{ '{:.0f}'.format(av.capital_sek) }}" aria-describedby="sek-note">
+    <span class="unit">SEK</span>
+    <button class="btn" type="submit">Update</button>
+  </div>
+  <small id="sek-note" class="muted">Remembered on this phone. Amounts use {{ av.sek_per_usd }} SEK per dollar.</small>
+</form>
+
+{% if not av.has_plan %}
+  {% for n in av.notes %}<p class="banner">{{ n }}</p>{% endfor %}
+{% else %}
+<section class="card hero">
+  <div class="kicker">{{ 'C trades' if av.status == 'waiting' else 'C traded' }}</div>
+  <div class="big">{{ av.when_local }}</div>
+  <small class="muted">{{ av.when_ny }} New York · plan from {{ av.signal_day }}'s close{% if av.state != 'normal' %} · state {{ av.state }}{% endif %}</small>
+</section>
+
+<h2>Do this on Avanza</h2>
+{% if av.trades %}
+<ul class="plain match">
+{% for t in av.trades %}
+  <li class="match-row">
+    <label class="tick" aria-label="I did this">
+      <input type="checkbox" data-done="avanza:{{ t.done_key }}"><span aria-hidden="true"></span>
+    </label>
+    <div class="grow">
+      <div class="row"><span class="act {{ t.action|lower }}">{{ t.action }}</span><b class="product">{{ t.product }}</b></div>
+      <div class="amount {{ 'down' if t.action == 'SELL' else 'up' }}">{% if t.all_of_it %}Sell all of it{% if t.sek %} <small>(about {{ '{:,.0f}'.format(t.sek).replace(',', ' ') }} SEK)</small>{% endif %}{% else %}about {{ '{:,.0f}'.format(t.sek).replace(',', ' ') }} SEK{% endif %}</div>
+      <small class="muted">{{ t.status }} · target {{ t.target_weight|pct(0, false) }} of your money · C's fund {{ t.fund }}</small>
+      {% if t.note %}<small>{{ t.note }}</small>{% endif %}
+    </div>
+  </li>
+{% endfor %}
+</ul>
+<p class="muted small">Tick each one when you have done it (saved on this phone only). Sells first, then buys.</p>
+{% endif %}
+{% for n in av.notes %}<p class="banner">{{ n }}</p>{% endfor %}
+
+<h2>Your portfolio after this week</h2>
+<ul class="plain">
+{% for h in av.holdings %}
+  <li class="row"><span class="grow">{{ h.product }} <small class="muted">({{ h.fund }})</small></span><b class="num">{{ '{:,.0f}'.format(h.sek).replace(',', ' ') }} SEK</b><small class="muted num">{{ h.weight|pct(0, false) }}</small></li>
+{% endfor %}
+  <li class="row"><span class="grow">Cash (or a SEK savings account)</span><b class="num">{{ '{:,.0f}'.format(av.cash_weight * av.capital_sek).replace(',', ' ') }} SEK</b><small class="muted num">{{ av.cash_weight|pct(0, false) }}</small></li>
+</ul>
+
+<details class="card">
+  <summary>How to place them on Avanza</summary>
+  <ol>
+    <li>Search the fund's name (the code in brackets, e.g. SGLN, finds it fastest) and open it.</li>
+    <li>Tap <b>Köp</b> (buy) or <b>Sälj</b> (sell). Pick the number of shares that comes closest to the amount above.</li>
+    <li>Then set a <b>stop-loss</b> order {{ (av.stop_pct * 100)|round|int }}% below your buy price, like C's emergency stop.</li>
+    <li>Come back next Monday: C checks its funds every Friday and trades only when something has moved far enough.</li>
+  </ol>
+  <p class="muted small">Avanza's funds are the European versions of C's US funds: they move almost the same, not exactly. This is a paper-trading experiment, not advice.</p>
+</details>
+{% endif %}
+{% endif %}
+{% endblock %}

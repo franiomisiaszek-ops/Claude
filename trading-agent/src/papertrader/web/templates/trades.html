@@ -21,9 +21,20 @@
   {% endif %}
   <details{% if not s.open %} open{% endif %}><summary>{{ 'Recent orders' if s.name == 'C' else 'Closed trades' }} ({{ s.closed|length }})</summary>
     {% if s.name == 'C' %}
-      {{ ui.table(s.closed, s.closed_columns, 'No filled orders yet.', {'shares': 'num', 'price': 'money'}) }}
+      {% if not s.closed %}<p class="muted">No filled orders yet.</p>{% endif %}
+      <ul class="plain">{% for o in s.closed %}
+        <li class="trade"><span><span class="act {{ o.side }}">{{ o.side|upper }}</span> <span class="ticker">{{ o.fund }}</span> <small class="muted">{{ o.kind }}</small></span>
+          <span class="pnl num">{{ o.shares|num(3) }} @ {{ o.price|money }}</span>
+          <small class="sub muted">{{ o.when }} · {{ o.status }}</small></li>
+      {% endfor %}</ul>
     {% else %}
-      {{ ui.table(s.closed, s.closed_columns, 'No closed trades yet.', {'P&L $': 'signed', 'P&L %': 'pct100', 'vs SPY %': 'pct100', 'days held': 'num'}) }}
+      {% if not s.closed %}<p class="muted">No closed trades yet.</p>{% endif %}
+      <ul class="plain">{% for t in s.closed %}
+        <li class="trade"><span class="ticker">{{ t.ticker }}</span>
+          <span class="pnl {{ t['P&L $']|cls }}">{{ t['P&L $']|signed_money }} <small>{{ '%+.2f%%'|format(t['P&L %']) if t['P&L %'] is not none and t['P&L %'] == t['P&L %'] else '' }}</small></span>
+          <small class="sub muted">{{ t.closed }} · {{ t['exit by'] or 'closed' }}{% if t['days held'] is not none and t['days held'] == t['days held'] %} · {{ t['days held'] }} days{% endif %}{% if t['vs SPY %'] is not none and t['vs SPY %'] == t['vs SPY %'] %} · vs SPY {{ '%+.2f%%'|format(t['vs SPY %']) }}{% endif %}{% if t['agents right'] %} · right: {{ t['agents right'] }}{% endif %}</small></li>
+      {% endfor %}</ul>
+      {% if s.closed %}<details><summary>All columns</summary>{{ ui.table(s.closed, s.closed_columns, '', {'P&L $': 'signed', 'P&L %': 'pct100', 'vs SPY %': 'pct100', 'days held': 'num'}) }}</details>{% endif %}
     {% endif %}
   </details>
 </section>

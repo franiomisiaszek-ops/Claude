@@ -3,10 +3,16 @@
 {% block content %}
 <h1>Today</h1>
 {% if today %}
+{% if today.start %}
+{{ ui.race([('A', today.cards|selectattr('name', 'equalto', 'A')|map(attribute='since_start_pct')|first|default(none)), ('B', today.cards|selectattr('name', 'equalto', 'B')|map(attribute='since_start_pct')|first|default(none)), ('C', today.cards|selectattr('name', 'equalto', 'C')|map(attribute='since_start_pct')|first|default(none)), ('SPY', today.spy_since_start_pct)], 'Since the start (' ~ today.start.strftime('%d %b') ~ ')') }}
+{% else %}
+<section class="card"><b>The experiment has not started yet.</b><p class="muted">From the first day, the race between A, B, C and SPY shows here.</p></section>
+{% endif %}
 <p class="muted">
   SPY today <b class="{{ today.spy_day_pct|cls }}">{{ today.spy_day_pct|pct(2) }}</b> ({{ today.spy_note }})
   {% if today.start %} · since the start ({{ today.start.strftime('%d %b %Y') }}) <b class="{{ today.spy_since_start_pct|cls }}">{{ today.spy_since_start_pct|pct }}</b>{% else %} · the experiment has not started yet{% endif %}
 </p>
+<a class="card shortcut" href="/avanza"><span class="grow"><b>Match on Avanza</b><small class="muted">your C trades this week, in SEK</small></span><span aria-hidden="true">›</span></a>
 <div class="grid three">
 {% for c in today.cards %}
   <section class="card">
