@@ -403,6 +403,9 @@ def test_ask_answers_from_the_systems_own_data(engine: Engine, b_engine: Engine)
     assert question == "why NVDA?" and "=== SYSTEM B ===" in data and "=== SYSTEM A ===" not in data
     assert "Idea 1: buy NVDA, status proposed, confidence 80%: strong reasons" in data
     assert "Account $25,500.00, today +2.00%" in data
+    assert (
+        "Open positions: none (the account holds only cash)" in data
+    )  # so "nothing" can be said plainly
     assert bot.handle("/ask").startswith("Ask in plain words")
     bot.asker = None
     assert "needs ANTHROPIC_API_KEY" in bot.handle("/ask what now?")

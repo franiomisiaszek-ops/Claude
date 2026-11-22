@@ -82,6 +82,8 @@ def context(views: Mapping[Any, Any], now: datetime, system: str | None = None) 
             if not trades and snap.positions:
                 lines += [f"Holding {p.qty:g} {p.symbol} at {money(p.avg_entry)}, now {money(p.price)} "
                           f"({signed_pct(p.pnl_pct)})" for p in snap.positions.values()]  # fmt: skip
+            if not trades and not snap.positions:
+                lines.append("Open positions: none (the account holds only cash)")
             decision = latest_daily_decision(session, day)
             if decision is not None:
                 lines.append(f"Today's judge ({decision.as_of.astimezone(NEW_YORK):%H:%M}): market: "
