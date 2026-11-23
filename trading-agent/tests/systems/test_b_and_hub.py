@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx2
@@ -181,3 +182,15 @@ def test_the_hub_finds_the_systems_that_are_set_up(engine: Engine, database_url:
     for view in (*first.values(), *later.values()):
         view.engine.dispose()
     b.dispose()
+
+
+def test_windows_line_endings_do_not_change_the_fingerprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Windows checkout stores the prompts with CRLF: B must still accept A's research."""
+    from papertrader.research import reuse
+
+    crlf = tmp_path / "prompts.py"
+    crlf.write_bytes(reuse.PROMPTS_FILE.read_bytes().replace(b"\n", b"\r\n"))
+    monkeypatch.setattr(reuse, "PROMPTS_FILE", crlf)
+    assert reuse.agents_fingerprint(CFG) == reuse.FROZEN_A_FINGERPRINT

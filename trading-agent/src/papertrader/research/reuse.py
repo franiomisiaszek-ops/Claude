@@ -36,9 +36,13 @@ class ReuseRefused(RuntimeError):
 
 
 def agents_fingerprint(config: AppConfig) -> str:
-    """A short hash of everything that shapes an agent's answer."""
+    """A short hash of everything that shapes an agent's answer.
+
+    Line endings are ignored: a Windows checkout stores the same prompts with "\r\n",
+    which changes nothing the agents see but would change the bytes."""
     payload = json.dumps(config.agents.model_dump(mode="json"), sort_keys=True)
-    digest = hashlib.sha256(payload.encode() + PROMPTS_FILE.read_bytes())
+    prompts = PROMPTS_FILE.read_bytes().replace(b"\r\n", b"\n")
+    digest = hashlib.sha256(payload.encode() + prompts)
     return digest.hexdigest()[:16]
 
 
