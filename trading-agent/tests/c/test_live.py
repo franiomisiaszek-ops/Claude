@@ -251,3 +251,21 @@ def test_the_weekly_orders_wait_for_their_heads_up(c_engine: Engine) -> None:
     assert statuses[skipped] == SKIPPED and all(
         s == SENT for t, s in statuses.items() if t != skipped
     )
+
+
+def test_cs_prices_never_ask_alpaca_for_the_last_15_minutes(c_engine: Engine) -> None:
+    """Alpaca's free plan refuses data newer than 15 minutes ("recent SIP data")."""
+    from datetime import timedelta
+
+    from papertrader.c.data import refresh_live
+
+    asked: list[Any] = []
+
+    def bars(tickers: Any, timeframe: str, start: datetime, end: datetime) -> dict[str, Any]:
+        asked.append((timeframe, start, end))
+        return {"SPY": [{"t": "2026-11-23T05:00:00Z", "o": 1, "h": 2, "l": 1, "c": 2, "v": 10}]}
+
+    now = datetime(2026, 11, 23, 21, 30, tzinfo=UTC)  # 16:30 New York, when C's job runs
+    with make_session_factory(c_engine)() as session:
+        assert refresh_live(session, bars, c_config().portfolio, now) == 1
+    assert asked[0][0] == "1Day" and asked[0][2] <= now - timedelta(minutes=15)

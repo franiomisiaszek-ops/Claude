@@ -768,9 +768,7 @@ class Jobs:
         data = AlpacaSdkData(key.get_secret_value(), secret.get_secret_value(),
                              feed=self.config.ingest.alpaca_feed, adjustment="all")  # fmt: skip
         with self.sessions() as session:
-            rows = refresh_live(
-                session, data.bars, self.config.portfolio, new_york_date(self.now())
-            )
+            rows = refresh_live(session, data.bars, self.config.portfolio, self.now())
             session.commit()
         return {"rows": rows, "summary": f"{rows} daily prices stored"}
 

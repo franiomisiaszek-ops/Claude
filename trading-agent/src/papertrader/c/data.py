@@ -143,13 +143,23 @@ def live_tickers(cfg: PortfolioConfig) -> list[str]:
     return sorted({f.ticker for f in cfg.funds} | {"SPY"})
 
 
-def refresh_live(session: Session, bars: Any, cfg: PortfolioConfig, today: date) -> int:
-    """`bars(tickers, timeframe, start, end)` is the shared Alpaca data client's method."""
-    from papertrader.ingest.timeutil import at_new_york
+FREE_PLAN_DELAY = timedelta(
+    minutes=20
+)  # Alpaca's free plan serves only data at least 15 minutes old
 
-    start = today - timedelta(days=LIVE_DAYS)
-    raw = bars(live_tickers(cfg), "1Day", at_new_york(start, datetime.min.time()),
-               at_new_york(today + timedelta(days=1), datetime.min.time()))  # fmt: skip
+
+def refresh_live(session: Session, bars: Any, cfg: PortfolioConfig, now: datetime) -> int:
+    """`bars(tickers, timeframe, start, end)` is the shared Alpaca data client's method.
+
+    The request ends 20 minutes ago: asking the free plan for anything newer is refused
+    ("subscription does not permit querying recent SIP data"). At C's 16:30 run that
+    still includes the day's closing bar."""
+    from papertrader.ingest.timeutil import at_new_york, new_york_date
+
+    start = new_york_date(now) - timedelta(days=LIVE_DAYS)
+    raw = bars(
+        live_tickers(cfg), "1Day", at_new_york(start, datetime.min.time()), now - FREE_PLAN_DELAY
+    )
     return store(session, "alpaca", parse_alpaca(raw))
 
 
