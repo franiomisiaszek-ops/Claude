@@ -496,6 +496,7 @@ every 10 minutes).
 | 08:20 | A's pattern model and judge |
 | 08:25 | B copies A's agent reports, runs its own judge on them, then its switches |
 | 08:45 | Morning briefs, tagged [A] and [B] |
+| 08:55 | Top 3 ideas of A, B and C with the Avanza equivalent (hub; information only) |
 | 08:00 | C's news watch |
 | 09:35 | Orders (each system on its own account; C on Mondays) |
 | 09:45-15:30 | B's intraday scanner, every 5 minutes (shadow mode at first) |

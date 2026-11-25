@@ -602,3 +602,21 @@ def test_iphone_details(engine: Engine, database_url: str, tmp_path: Path) -> No
     renewed = client.get("/")
     assert renewed.status_code == 200 and "pt_session=" in renewed.headers.get("set-cookie", "")
     assert '<a class="back" href="/more">' in client.get("/news").text
+
+
+def test_top_ideas_message_lists_each_systems_ideas_with_avanza(systems: dict[str, Engine]) -> None:
+    from papertrader.hub import SystemView
+    from papertrader.notify.topideas import top_ideas_text
+
+    seed_all(systems)
+    views = {n: SystemView(n, load_c_config() if n == "C" else shipped_config(), e, make_session_factory(e))
+             for n, e in systems.items()}  # fmt: skip
+    text = top_ideas_text(views, NOW)
+    assert text is not None and "information only" in text
+    assert "\nA\n1. BUY AAPL at" in text and "% confident" in text
+    assert "Avanza: buy AAPL (US share) for about" in text
+    assert "(below the bar)" in text  # MSFT is shown, marked
+    assert (
+        "C (weekly rules, no confidence %)" in text and "iShares Physical Gold ETC (SGLN)" in text
+    )
+    assert top_ideas_text({}, NOW) is None

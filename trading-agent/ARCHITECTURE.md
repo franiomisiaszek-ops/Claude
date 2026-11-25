@@ -10,6 +10,7 @@ of every phase. Sections marked *(planned)* describe the design for phases not b
 07:30  agents      ~18 Claude research agents, in parallel ->  agent_reports
 08:20  model+judge pattern-model scores, then the judge    ->  judge_decisions, trade_ideas
 08:45  notify      Telegram morning brief
+08:55  hub         Top 3 ideas of A, B and C with the Avanza equivalent
 09:35  trading     risk checks, bracket orders (PAPER)     ->  orders, fills, trades
  ...   monitor     every 10 minutes: exits, kill switch
 16:15  reconcile   end-of-day summary                      ->  equity_snapshots
@@ -377,6 +378,7 @@ Known limits:
 notify/telegram.py  Bot API client (plain HTTPS) + flush_outbox()
 notify/bot.py       CommandBot: reads commands with long polling, answers them
 notify/reports.py   morning brief, weekly summary, /status, /pnl, /positions texts
+notify/topideas.py  08:55 hub message: top 3 ideas of A, B, C + Avanza equivalent (no orders)
 notify/alerts.py    budget alerts, job failed / job missed alerts
 notify/service.py   wiring for the long-running app: sender job + bot thread
 trading/control.py  pause / resume, shared by engine, CLI and bot

@@ -485,6 +485,7 @@ trading days only (the Alpaca market calendar knows the holidays and half days):
 | 07:30 | 13:30 | `research_agents` | The research agents write their reports |
 | 08:20 | 14:20 | `judge` | Pattern-model scores, then the judge decides |
 | 08:45 | 14:45 | `morning_brief` | Telegram morning brief |
+| 08:55 | 14:55 | `top_ideas` (hub) | One message: A's, B's and C's top 3 ideas with the Avanza equivalent (information only, no order) |
 | 09:35 | 15:35 | `place_orders` | Sells what the judge wants out of, then places today's orders |
 | every 10 min | | `monitor` | Fills, time stops, the kill switch, bad news on held stocks |
 | 16:15 | 22:15 | `reconcile_eod` | Cancels unfilled orders, end-of-day summary |

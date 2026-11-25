@@ -243,6 +243,20 @@ def run_hub(runtime: Runtime) -> None:
         finally:
             client.close()
 
+    def top_ideas() -> None:
+        """Each system's top 3 ideas with the Avanza equivalent (information only)."""
+        from papertrader.notify.topideas import top_ideas_text
+
+        client = make_client(settings)
+        try:
+            text = top_ideas_text(views, utcnow())
+            if text:
+                client.send(chat, text)
+        except Exception:
+            log.exception("top ideas message failed")
+        finally:
+            client.close()
+
     bot = (
         HubBot(views, make_client(settings), chat, settings, telegram=telegram,
                asker=make_asker(settings, runtime.config, views))
@@ -276,6 +290,11 @@ def run_hub(runtime: Runtime) -> None:
                                                   minute=exp.weekly_time.minute,
                                                   timezone=ZoneInfo(runtime.config.schedule.timezone)),
                           id="weekly_comparison", max_instances=1, coalesce=True, misfire_grace_time=3600)  # fmt: skip
+        ideas_at = (datetime.combine(date(2000, 1, 3), runtime.config.schedule.morning_brief)
+                    + timedelta(minutes=10)).time()  # fmt: skip
+        scheduler.add_job(top_ideas, CronTrigger(day_of_week="mon-fri", hour=ideas_at.hour, minute=ideas_at.minute,
+                                                 timezone=new_york), id="top_ideas", max_instances=1,
+                          coalesce=True, misfire_grace_time=600)  # fmt: skip
 
     def _stop(signum: int, _frame: FrameType | None) -> None:
         log.info("hub shutdown requested", extra={"signal": signal.Signals(signum).name})
