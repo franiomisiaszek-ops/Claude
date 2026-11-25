@@ -181,7 +181,7 @@ async def write_lessons(
     )  # fmt: skip
     text = render(result.output, start, end, n)
     with sessions() as session:
-        row = m.Lesson(period_start=start, period_end=end, text=text, model=result.model,
+        row = m.Lesson(period_start=start, period_end=end, text=text, model=result.model, created_at=now,
                        payload=result.output.model_dump() | {"n": n, "cost_usd": result.cost_usd})  # fmt: skip
         session.add(row)
         session.commit()
