@@ -408,3 +408,11 @@ def test_alpaca_replies_are_read_or_left_out() -> None:
         [{"t": "2026-11-16T14:30:00Z", "o": 1, "h": 2, "l": 0.5, "c": 1.5, "v": 10}, {"o": 1}]
     )
     assert len(bars) == 1 and bars[0].close == 1.5
+
+
+def test_headline_times_are_in_new_york_time_like_the_scan() -> None:
+    from papertrader.b.live import headline_time
+
+    # 16:01 UTC is 11:01 New York (EST): before a 12:00 scan, not after it
+    assert headline_time("2026-11-23T16:01:00Z") == "2026-11-23 11:01 New York time"
+    assert headline_time(None) == headline_time("garbage") == "time unknown"

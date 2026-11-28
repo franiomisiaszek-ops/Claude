@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol, cast
 
+from papertrader.ingest.timeutil import NEW_YORK
+
 TIMEFRAMES = {"1Min": (1, "Minute"), "5Min": (5, "Minute")}
 CHUNK = 200
 
@@ -58,6 +60,16 @@ def _time(text: Any) -> datetime | None:
     if not text:
         return None
     return datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+
+
+def headline_time(text: Any) -> str:
+    """New York time, like the prompt's AS OF line (UTC stamps made Claude think the news
+    came after the scan)."""
+    try:
+        at = _time(text)
+    except ValueError:
+        at = None
+    return f"{at.astimezone(NEW_YORK):%Y-%m-%d %H:%M} New York time" if at else "time unknown"
 
 
 def parse_snapshot(ticker: str, raw: dict[str, Any]) -> Quote | None:
@@ -135,8 +147,8 @@ class AlpacaLive:
             include_content=False, exclude_contentless=False)))  # fmt: skip
         out: dict[str, list[str]] = {}
         for item in raw.get("news", []):
-            when = str(item.get("created_at", ""))[:16].replace("T", " ")
+            when = headline_time(item.get("created_at"))
             for symbol in item.get("symbols", []):
                 if symbol in tickers and len(out.setdefault(symbol, [])) < 5:
-                    out[symbol].append(f"{when} UTC: {item.get('headline', '')}")
+                    out[symbol].append(f"{when}: {item.get('headline', '')}")
         return out
