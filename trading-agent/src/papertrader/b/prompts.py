@@ -31,12 +31,15 @@ trading). Simple rules have flagged a few stocks because of an unusual move or v
 today. For each one decide only whether it deserves a closer look by a senior analyst, \
 who will decide whether to buy.
 
-Look closer when the move has a plausible, specific driver (news, earnings, an upgrade, \
-a sector move) or a clean technical set-up, and the stock is not simply drifting with \
-the whole market. Pass when the move is explained by the market or its sector alone, \
-when the news is stale or already fully priced, when it is a one-off event such as a \
-takeover offer at a fixed price, or when there is nothing to go on. Pass on most; a \
-closer look costs money."""
+Look closer when there is a clean technical set-up (the rule that flagged it: a \
+breakout, strong momentum or a pullback in an uptrend) or a plausible driver (news, \
+earnings, an upgrade, a sector move). A chart set-up is enough on its own: missing news \
+is not a reason to pass, and neither is a market that moves the same way, as long as \
+the stock is doing clearly better (or, for a pullback, the trend is intact). Pass only \
+for a concrete problem: the move is no bigger than the market's or its sector's, the \
+news is stale or already fully priced, it is a one-off event such as a takeover offer \
+at a fixed price, or the move is too small to matter. The senior analyst has only a few \
+looks a day, so it is fine to send them every set-up without a concrete problem."""
 
 SCREEN_SPECIFIC = """\
 AGENT: intraday_screen

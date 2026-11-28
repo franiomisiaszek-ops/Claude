@@ -50,4 +50,6 @@ def test_requests_are_built_with_the_sdks_own_types() -> None:
     assert (first.timeframe.amount_value, first.timeframe.unit_value.name) == (5, "Minute")
     assert first.feed.value == "iex" and second.feed.value == "sip"
     assert live.quotes(["AAPL"])["AAPL"].price == 101.0 and seen["snapshot"].feed.value == "iex"
-    assert live.headlines(["AAPL"], START, END) == {"AAPL": ["2026-11-16 13:05 UTC: Apple news"]}
+    assert live.headlines(["AAPL"], START, END) == {
+        "AAPL": ["2026-11-16 08:05 New York time: Apple news"]
+    }

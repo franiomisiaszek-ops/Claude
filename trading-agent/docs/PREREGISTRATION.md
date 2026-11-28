@@ -110,3 +110,5 @@ is recommended off. Agents are handled by switch 4 (pruning).
 | Date | Change | Why | Effect on the test |
 |---|---|---|---|
 | 2026-11-22 | Telegram heads-ups with a Skip button for B's and C's orders (phase X6); A has none | So you can stop an order in an emergency | Decided before the start. A skipped order counts as part of that system's result; every skip is recorded (`order_warnings`). Skips are meant for emergencies only |
+| 2026-11-28 | B's daily trade bar 65% → 60% (A stays at 65%) | The owner wants B to take more of its ideas; until 60 ideas are resolved B uses its raw confidence, and 65% let almost nothing through | Decided before the start. B's bar after calibration (55%) is unchanged |
+| 2026-11-28 | Intraday scanner (shadow): the screen no longer passes on chart set-ups only because there is no news; the analyst's bar 60% → 50%; news times shown in New York time (bug fix) | First shadow week: 0 plans from 51 candidates, about 75% dropped by the screen for "no news"; with reward at least 1.5x the risk, 50% already has a positive expected value | Decided before the start. Still shadow mode: no orders, so no effect on B's account |

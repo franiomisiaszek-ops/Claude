@@ -197,7 +197,7 @@ FOR, AGAINST and NEUTRAL are sums of (agent weight x report confidence). The con
 is built-in doubt: one agent alone at 0.8 gives 0.62, three give 0.83, and an opposing
 report pulls the figure down. Until the pattern model exists (Phase 4) its term is left
 out and the other two weights are scaled up to sum to 1. Trades at or above the threshold
-(0.65) and within the daily maximum are marked `proposed`; everything else is stored with
+(0.65; system B: 0.60) and within the daily maximum are marked `proposed`; everything else is stored with
 the reason it was not.
 
 Known limits:
